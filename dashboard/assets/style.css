@@ -1,0 +1,152 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+:root {
+    --bg-primary: #0A0A0F;
+    --bg-secondary: #111118;
+    --bg-card: #16161E;
+    --bg-card-hover: #1C1C28;
+    --accent-orange: #FF6B2B;
+    --accent-orange-dim: rgba(255, 107, 43, 0.15);
+    --accent-blue: #00D4FF;
+    --accent-blue-dim: rgba(0, 212, 255, 0.15);
+    --accent-green: #00FF88;
+    --accent-red: #FF3B5C;
+    --accent-yellow: #FFB800;
+    --text-primary: #E8E8ED;
+    --text-secondary: #8888A0;
+    --text-dim: #555566;
+    --border-color: #2A2A3A;
+    --font-data: 'JetBrains Mono', monospace;
+    --font-label: 'Space Grotesk', sans-serif;
+}
+
+.stApp {
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary) !important;
+    font-family: var(--font-label) !important;
+}
+
+.stApp header {
+    background-color: var(--bg-primary) !important;
+}
+
+[data-testid="stSidebar"] {
+    background-color: var(--bg-secondary) !important;
+    border-right: 1px solid var(--border-color) !important;
+}
+
+[data-testid="stSidebar"] .stMarkdown {
+    color: var(--text-primary) !important;
+}
+
+h1, h2, h3, h4 {
+    font-family: var(--font-label) !important;
+    color: var(--text-primary) !important;
+}
+
+h1 {
+    background: linear-gradient(135deg, var(--accent-orange), var(--accent-blue));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-weight: 700 !important;
+}
+
+.stMetric {
+    background-color: var(--bg-card) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 12px !important;
+    padding: 16px !important;
+}
+
+[data-testid="stMetricValue"] {
+    font-family: var(--font-data) !important;
+    color: var(--accent-orange) !important;
+}
+
+[data-testid="stMetricLabel"] {
+    font-family: var(--font-label) !important;
+    color: var(--text-secondary) !important;
+}
+
+.stButton > button {
+    background: linear-gradient(135deg, var(--accent-orange), #FF8F5B) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-family: var(--font-label) !important;
+    font-weight: 600 !important;
+    padding: 8px 24px !important;
+    transition: all 0.3s ease !important;
+}
+
+.stButton > button:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 4px 20px rgba(255, 107, 43, 0.4) !important;
+}
+
+.stSlider > div > div {
+    color: var(--accent-blue) !important;
+}
+
+.stSelectbox, .stRadio {
+    color: var(--text-primary) !important;
+}
+
+div[data-testid="stDataFrame"] {
+    font-family: var(--font-data) !important;
+}
+
+.risk-normal { color: var(--accent-green); }
+.risk-warning { color: var(--accent-yellow); }
+.risk-critical { color: var(--accent-red); }
+
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 20px;
+    margin: 8px 0;
+    transition: all 0.3s ease;
+}
+
+.card:hover {
+    border-color: var(--accent-orange);
+    background: var(--bg-card-hover);
+}
+
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+}
+
+@keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 5px var(--accent-orange); }
+    50% { box-shadow: 0 0 20px var(--accent-orange); }
+}
+
+.alert-banner {
+    background: linear-gradient(135deg, rgba(255, 59, 92, 0.2), rgba(255, 59, 92, 0.05));
+    border: 1px solid var(--accent-red);
+    border-radius: 8px;
+    padding: 16px;
+    animation: pulse-glow 2s infinite;
+}
+
+.stable-badge {
+    background: rgba(0, 255, 136, 0.15);
+    color: var(--accent-green);
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-family: var(--font-data);
+    font-size: 0.85em;
+}
+
+.unstable-badge {
+    background: rgba(255, 59, 92, 0.15);
+    color: var(--accent-red);
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-family: var(--font-data);
+    font-size: 0.85em;
+}

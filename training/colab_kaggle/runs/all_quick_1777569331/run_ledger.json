@@ -1,0 +1,34 @@
+{
+  "run_name": "all_quick_1777569331",
+  "started_at": "2026-04-30T17:15:31Z",
+  "events": [
+    {
+      "time": "2026-04-30T17:15:31Z",
+      "name": "environment",
+      "project_root": "C:\\project 5\\attempt 1(antigravity gemini)\\kineticsforge",
+      "python": "3.12.0 (tags/v3.12.0:0fb18b0, Oct  2 2023, 13:03:39) [MSC v.1935 64 bit (AMD64)]",
+      "torch": "2.10.0+cpu",
+      "cuda_available": false,
+      "cuda_device_count": 0,
+      "cuda_device_name": "",
+      "numpy": "2.2.6",
+      "working_directory": "C:\\project 5\\attempt 1(antigravity gemini)\\kineticsforge"
+    },
+    {
+      "time": "2026-04-30T17:15:31Z",
+      "name": "data",
+      "cathode_npz": 96,
+      "bms_npz": 40,
+      "leaching_grid_exists": true,
+      "real_manifest_exists": true,
+      "foundation_manifest_size": 13063,
+      "foundation_quality_size": 1126
+    },
+    {
+      "time": "2026-04-30T17:15:36Z",
+      "name": "cathode_start",
+      "epochs": 2,
+      "files": 32
+    }
+  ]
+}

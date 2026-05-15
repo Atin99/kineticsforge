@@ -1,0 +1,55 @@
+# Core ML/DL
+torch>=2.0.0
+torchdiffeq>=0.2.3
+torch_geometric>=2.3.0
+
+# Optional: JAX backend (not required for default PyTorch path)
+# diffrax>=0.3.1
+# jax>=0.4.10
+# jaxlib>=0.4.10
+
+# SINDy (standalone analysis tool only, NOT fed into live ODE)
+pysindy>=1.7.5
+
+# Meta-learning
+learn2learn>=0.2.0
+
+# Bayesian optimization
+optuna>=3.2.0
+# botorch>=0.9.0       # Install on Kaggle for real qNEHVI; local uses proxy
+
+# Classical ML
+scikit-learn>=1.2.2
+
+# Numerics
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Dashboard (INTERNAL DEBUG TOOL only)
+streamlit>=1.22.0
+plotly>=5.14.0
+matplotlib>=3.7.0
+
+# Experiment tracking
+wandb>=0.15.0
+
+# Crystal structures (requires Materials Project API key)
+pymatgen>=2023.5.10
+mp-api>=0.33.3
+# chgnet>=0.3.0        # Install on Kaggle for CHGNet fine-tuning
+
+# Data
+pandas>=2.0.0
+pyarrow>=12.0.0
+
+# Literature scraping
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+pdfplumber>=0.10.0
+tqdm>=4.66.0
+
+# API (product surface)
+fastapi>=0.100.0
+uvicorn>=0.22.0
+pydantic>=2.0.0

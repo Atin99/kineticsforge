@@ -1,0 +1,16 @@
+# Render free-tier deployment config
+services:
+  - type: web
+    name: kineticsforge
+    runtime: python
+    buildCommand: pip install fastapi uvicorn[standard] numpy pydantic
+    startCommand: python serve_lite.py
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: OPENROUTER_MODEL
+        value: openrouter/free
+      - key: OPENROUTER_API_KEY
+        sync: false

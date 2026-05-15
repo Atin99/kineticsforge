@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KineticsForge - Battery Physics Workbench</title>
+  <meta name="description" content="Battery engineering workbench for degradation, pack thermal risk, Na-ion cathode screening, and recycling recovery simulations.">
+  <link rel="stylesheet" href="index.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23cc0000'/><text x='16' y='23' text-anchor='middle' fill='white' font-size='18' font-weight='900' font-family='system-ui'>K</text></svg>">
+</head>
+<body>
+
+<!-- ── NAVIGATION ──────────────────────────────── -->
+<nav class="nav" id="nav">
+  <a href="#" class="nav-brand" onclick="navigate('hero')">
+    <div class="forge-mark">K</div>
+    KINETICSFORGE
+  </a>
+  <div class="nav-links">
+    <a href="#" onclick="navigate('diagnostics')" id="nav-diagnostics">Diagnostics</a>
+    <a href="#" onclick="navigate('bms')" id="nav-bms">BMS</a>
+    <a href="#" onclick="navigate('materials')" id="nav-materials">Materials</a>
+    <a href="#" onclick="navigate('recycling')" id="nav-recycling">Recycling</a>
+    <a href="#" onclick="navigate('architecture')" id="nav-architecture">Architecture</a>
+    <a href="#" onclick="navigate('platform')" id="nav-platform">Status</a>
+    <a href="#" onclick="navigate('api')" id="nav-api">API</a>
+  </div>
+  <div class="nav-status">
+    <span class="dot"></span>
+    <span>OPERATIONAL</span>
+  </div>
+</nav>
+
+<!-- ── HERO ────────────────────────────────────── -->
+<section class="section active" id="sec-hero">
+  <div class="hero">
+    <h1 class="hero-title">
+      <span class="red">Battery Physics</span><br>
+      Workbench
+    </h1>
+    <p class="hero-sub">
+      A lightweight engineering workbench for four decisions: failure mechanism, pack cell risk,
+      cathode synthesis priority, and recycling recipe economics.
+    </p>
+    <div class="hero-operating">
+      <div><span>Diagnostics</span> SOH, knee point, and dominant loss terms from T, C-rate, cycle count, and editable kinetics.</div>
+      <div><span>BMS</span> Battery Management System simulation: thermal propagation, EIS drift, risk, and action threshold.</div>
+      <div><span>Materials</span> Na-ion cathode ranking by capacity, stability, fade, cost, and defect risk.</div>
+      <div><span>Recycling</span> Leach time, acid, temperature, particle size, recovery uncertainty, and batch economics.</div>
+    </div>
+    <div class="hero-metrics">
+      <div class="hero-metric">
+        <div class="val" id="counter-data">0</div>
+        <div class="lbl">Real Data Rows</div>
+      </div>
+      <div class="hero-metric">
+        <div class="val" id="counter-models">0</div>
+        <div class="lbl">Physics Surfaces</div>
+      </div>
+      <div class="hero-metric">
+        <div class="val" id="counter-cells">0</div>
+        <div class="lbl">Battery Cells</div>
+      </div>
+      <div class="hero-metric">
+        <div class="val" id="counter-endpoints">0</div>
+        <div class="lbl">API Endpoints</div>
+      </div>
+    </div>
+    <div class="hero-cta">
+      <button class="btn btn-primary" onclick="navigate('diagnostics')">Launch Diagnostics</button>
+      <button class="btn btn-ghost" onclick="navigate('architecture')">View Architecture</button>
+    </div>
+  </div>
+</section>
+
+<!-- ── DIAGNOSTICS (Cathode UDE) ──────────────── -->
+<section class="section" id="sec-diagnostics">
+  <div class="section-header">
+    <h2>Cathode Degradation Diagnostics</h2>
+    <p>Na-ion capacity fade from explicit SEI, P2-O2, Jahn-Teller, desolvation, rate-stress,
+       and bounded residual terms.</p>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title"><span class="indicator"></span> Simulation Parameters</div>
+
+      <div class="range-row">
+        <div class="range-header">
+          <span class="name">Temperature</span>
+          <span class="val" id="temp-val">45°C</span>
+        </div>
+        <div class="range-desc">Operating temperature. Higher values accelerate SEI growth via Arrhenius kinetics (k = A·exp(-Ea/RT)). Indian summer ambient baseline is 45°C.</div>
+        <input type="range" id="temp-slider" min="20" max="70" value="45" oninput="updateDiag()">
+      </div>
+
+      <div class="range-row">
+        <div class="range-header">
+          <span class="name">C-Rate</span>
+          <span class="val" id="crate-val">1.0C</span>
+        </div>
+        <div class="range-desc">Charge/discharge rate relative to capacity. Higher C-rates induce lithium plating and accelerated mechanical stress on cathode particles. Industrial BMS typically operates at 0.5–2C.</div>
+        <input type="range" id="crate-slider" min="0.2" max="3" value="1.0" step="0.1" oninput="updateDiag()">
+      </div>
+
+      <div class="range-row">
+        <div class="range-header">
+          <span class="name">Cycles</span>
+          <span class="val" id="cycles-val">500</span>
+        </div>
+        <div class="range-desc">Total charge-discharge cycles to simulate. The UDE integrates the degradation ODE forward using an Euler solver with adaptive clipping to maintain physical bounds.</div>
+        <input type="range" id="cycles-slider" min="100" max="2000" value="500" step="50" oninput="updateDiag()">
+      </div>
+
+      <div class="formula-box">
+        <div class="formula-title">Diagnostics Composition</div>
+        <code>Na_x(Mn,Fe)O2 controls SOC window, P2-O2 onset, JT strain, desolvation, and voltage fade.</code>
+        <div class="knob-grid">
+          <label>Na <span id="diag-na-val">1.02</span><input class="mini-input" id="diag-na" type="number" value="1.02" min="0.60" max="1.20" step="0.02" oninput="updateDiag()"></label>
+          <label>Mn <span id="diag-mn-val">0.52</span><input class="mini-input" id="diag-mn" type="number" value="0.52" min="0.05" max="0.95" step="0.02" oninput="updateDiag()"></label>
+          <label>Fe <span id="diag-fe-val">0.43</span><input class="mini-input" id="diag-fe" type="number" value="0.43" min="0.05" max="0.95" step="0.02" oninput="updateDiag()"></label>
+          <label>dopant <span id="diag-dop-val">0.050</span><input class="mini-input" id="diag-dop" type="number" value="0.05" min="0" max="0.25" step="0.01" oninput="updateDiag()"></label>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="switch-row">
+        <div class="switch-label">
+          <span class="name">P2→O2 Phase Transition</span>
+          <span class="desc">Enables the prismatic-to-octahedral structural phase transition ODE term for Na-ion cathodes. This captures the irreversible capacity loss during high-voltage cycling above 4.0V where the P2 layered structure transforms to O2.</span>
+        </div>
+        <label class="switch"><input type="checkbox" id="sw-p2o2" checked onchange="updateDiag()"><span class="slider"></span></label>
+      </div>
+
+      <div class="switch-row">
+        <div class="switch-label">
+          <span class="name">Jahn-Teller Distortion</span>
+          <span class="desc">Couples Mn³⁺ Jahn-Teller distortion into the degradation rate. In Mn-rich cathodes, the eg electron in the d⁴ configuration causes tetragonal elongation that accelerates lattice strain and capacity fade.</span>
+        </div>
+        <label class="switch"><input type="checkbox" id="sw-jt" checked onchange="updateDiag()"><span class="slider"></span></label>
+      </div>
+
+      <div class="switch-row">
+        <div class="switch-label">
+          <span class="name">SEI Growth Model</span>
+          <span class="desc">Solid Electrolyte Interphase growth follows √t kinetics with Arrhenius temperature dependence. The SEI layer consumes active lithium/sodium ions, causing irreversible capacity loss proportional to film thickness.</span>
+        </div>
+        <label class="switch"><input type="checkbox" id="sw-sei" checked onchange="updateDiag()"><span class="slider"></span></label>
+      </div>
+
+      <div class="switch-row">
+        <div class="switch-label">
+          <span class="name">Residual Correction</span>
+          <span class="desc">Adds a bounded residual term for model mismatch. It is a correction channel, not a substitute for the explicit SEI, phase-transition, and distortion terms.</span>
+        </div>
+        <label class="switch"><input type="checkbox" id="sw-neural" checked onchange="updateDiag()"><span class="slider"></span></label>
+      </div>
+
+      <div class="formula-box">
+        <div class="formula-title">Editable Degradation Equation</div>
+        <code>dQ/dN = -Q[ kSEI·sqrt(N/Nf) + 0.65·kP2·g(SOC,T,JT) + kJT·JT + kdes·ln(1+DNa) + kBV·eta² + r ]</code>
+        <div class="knob-grid">
+          <label>SEI scale<input class="mini-input" id="diag-k-sei" type="number" value="1.00" step="0.05"></label>
+          <label>SEI Ea eV<input class="mini-input" id="diag-ea-sei" type="number" value="0.56" step="0.02"></label>
+          <label>P2 rate<input class="mini-input" id="diag-p2-k" type="number" value="0.0028" step="0.0001"></label>
+          <label>P2 SOC*<input class="mini-input" id="diag-p2-soc" type="number" value="0.78" step="0.01"></label>
+          <label>JT scale<input class="mini-input" id="diag-jt-scale" type="number" value="1.00" step="0.05"></label>
+          <label>BV scale<input class="mini-input" id="diag-bv-scale" type="number" value="1.00" step="0.05"></label>
+          <label>C-rate power<input class="mini-input" id="diag-stress-exp" type="number" value="0.55" step="0.05"></label>
+          <label>Residual scale<input class="mini-input" id="diag-residual-scale" type="number" value="1.00" step="0.05"></label>
+        </div>
+      </div>
+
+      <div class="formula-box">
+        <div class="formula-title">Fit Experimental Capacity Data</div>
+        <code>Rows: cycle, capacity fraction or percent. Fits SEI scale, P2 rate, JT scale, and C-rate stress for this session.</code>
+        <textarea id="diag-cal-data" class="mini-input" style="width:100%;min-height:96px;margin-top:0.75rem" spellcheck="false">0,1.000
+100,0.930
+300,0.835
+500,0.760</textarea>
+        <div style="margin-top:0.75rem;display:flex;gap:0.75rem;flex-wrap:wrap">
+          <button class="btn btn-ghost" onclick="calibrateDiagnostics()" type="button">Calibrate</button>
+          <button class="btn btn-ghost" onclick="exportDiagnosticsCSV()" type="button">Download CSV</button>
+        </div>
+        <div class="plot-note" id="diag-cal-result"></div>
+        <div class="chart-box" id="diag-cal-chart" style="height:180px;margin-top:0.75rem"></div>
+      </div>
+
+      <div style="margin-top:1rem">
+        <button class="btn btn-primary" onclick="runDiagnostics()" id="btn-run-diag">Run Simulation</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title"><span class="indicator"></span> Capacity Fade Curve</div>
+        <div class="chart-box" id="diag-chart" style="height:280px"></div>
+      </div>
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title"><span class="indicator"></span> Average Voltage Fade</div>
+        <div class="chart-box" id="diag-voltage-chart" style="height:170px"></div>
+      </div>
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title"><span class="indicator"></span> Mechanism Contributions</div>
+        <div class="chart-box" id="diag-mech-chart" style="height:180px"></div>
+      </div>
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title"><span class="indicator"></span> Mechanism State Map</div>
+        <div class="chart-box" id="diag-phase-chart" style="height:210px"></div>
+        <div class="plot-note" id="diag-map-note">Cycle is horizontal, SOC band is vertical, color is the dominant degradation channel, and brightness is stress intensity.</div>
+      </div>
+      <div class="decision-box" id="diag-decision">Run the simulation to see the dominant failure mechanism and experiment recommendation.</div>
+      <div class="grid-2">
+        <div class="panel stat">
+          <div class="val" id="diag-eol">--</div>
+          <div class="lbl">End-of-Life Capacity</div>
+        </div>
+        <div class="panel stat">
+          <div class="val" id="diag-fade">--</div>
+          <div class="lbl">Total Fade %</div>
+        </div>
+        <div class="panel stat">
+          <div class="val" id="diag-knee">--</div>
+          <div class="lbl">Knee Point Cycle</div>
+        </div>
+        <div class="panel stat">
+          <div class="val" id="diag-rul">--</div>
+          <div class="lbl">RUL at 80% SOH</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── BMS ────────────────────────────────────── -->
+<section class="section" id="sec-bms">
+  <div class="section-header">
+    <h2>BMS Pack Monitoring</h2>
+    <p>Pack thermal graph with ohmic heat, neighbor conduction, cooling, EIS drift,
+       and multi-window risk smoothing.</p>
+    <p>BMS means Battery Management System. Here it answers one operational question: which cell is becoming unsafe early enough to cool, isolate, or inspect?</p>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title"><span class="indicator"></span> Pack Configuration</div>
+
+      <div class="range-row">
+        <div class="range-header">
+          <span class="name">Pack Size</span>
+          <span class="val" id="pack-val">8 cells</span>
+        </div>
+        <div class="range-desc">Number of cells in the simulated pack. Edges represent adjacent thermal paths; each cell integrates heat generation, conduction, and cooling.</div>
+        <input type="range" id="pack-slider" min="4" max="32" value="8" step="2" oninput="updateBMS()">
+      </div>
+
+      <div class="range-row">
+        <div class="range-header">
+          <span class="name">Simulation Duration</span>
+          <span class="val" id="dur-val">120s</span>
+        </div>
+        <div class="range-desc">Monitoring duration in seconds. Each step updates temperature, SEI drift, charge-transfer resistance, and risk history.</div>
+        <input type="range" id="dur-slider" min="30" max="600" value="120" step="10" oninput="updateBMS()">
+      </div>
+
+      <div class="range-row">
+        <div class="range-header">
+          <span class="name">Ambient Temperature</span>
+          <span class="val" id="bms-ambient-val">45 C</span>
+        </div>
+        <div class="range-desc">External pack environment used in the cooling term Ta. Hot ambient reduces thermal headroom and raises EIS-driven risk.</div>
+        <input type="range" id="bms-ambient" min="15" max="70" value="45" step="1" oninput="updateBMS()">
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="switch-row">
+        <div class="switch-label">
+          <span class="name">Inject Cell Failure</span>
+          <span class="desc">Injects an accelerating resistance-growth fault into one random cell so the thermal and EIS risk logic has a stress case.</span>
+        </div>
+        <label class="switch"><input type="checkbox" id="sw-fault" checked onchange="updateBMS()"><span class="slider"></span></label>
+      </div>
+
+      <div class="switch-row">
+        <div class="switch-label">
+          <span class="name">EIS Feature Extraction</span>
+          <span class="desc">Adds Randles-style Rct and RSEI drift into the risk score. These features move before temperature alone becomes conclusive.</span>
+        </div>
+        <label class="switch"><input type="checkbox" id="sw-eis" checked onchange="updateBMS()"><span class="slider"></span></label>
+      </div>
+
+      <div class="switch-row">
+        <div class="switch-label">
+          <span class="name">Asymmetric Alert Loss</span>
+          <span class="desc">Uses a lower action threshold when late detection is more costly than a false alarm.</span>
+        </div>
+        <label class="switch"><input type="checkbox" id="sw-asym" checked onchange="updateBMS()"><span class="slider"></span></label>
+      </div>
+
+      <div class="formula-box">
+        <div class="formula-title">Editable Pack Thermal/Risk Equation</div>
+        <code>Cth dTi/dt = I²Ri + Σ kij(Tj-Ti) - h(Ti-Ta); risk = f(T, dT/dt, Rct, RSEI, neighbor risk)</code>
+        <div class="knob-grid">
+          <label>Cth J/K<input class="mini-input" id="bms-cth" type="number" value="95" step="5"></label>
+          <label>edge k<input class="mini-input" id="bms-kedge" type="number" value="0.18" step="0.01"></label>
+          <label>cooling h<input class="mini-input" id="bms-cool" type="number" value="0.045" step="0.005"></label>
+          <label>load scale<input class="mini-input" id="bms-load" type="number" value="1.00" step="0.05"></label>
+          <label>Rct gate<input class="mini-input" id="bms-rct-gate" type="number" value="0.043" step="0.001"></label>
+          <label>alert risk<input class="mini-input" id="bms-risk-thresh" type="number" value="0.42" step="0.01"></label>
+        </div>
+      </div>
+
+      <div style="margin-top:1rem">
+        <button class="btn btn-primary" onclick="runBMS()">Run Pack Simulation</button>
+        <button class="btn btn-ghost" onclick="exportBmsCSV()" type="button" style="margin-left:0.75rem">Download CSV</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title"><span class="indicator"></span> Cell Risk Map</div>
+        <div id="bms-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:0.5rem"></div>
+        <div class="chart-box" id="bms-thermal-chart" style="height:230px;margin-top:1rem"></div>
+        <div class="readout-grid" id="bms-readout"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title"><span class="indicator"></span> Alert Timeline</div>
+        <div class="chart-box" id="bms-trend-chart" style="height:170px;margin-bottom:1rem"></div>
+        <div class="console" id="bms-log">
+          <div class="info">Awaiting simulation...</div>
+        </div>
+      </div>
+      <div class="decision-box" id="bms-decision">Run the pack simulation to get a cell-level action recommendation.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ── MATERIALS DISCOVERY ────────────────────── -->
+<section class="section" id="sec-materials">
+  <div class="section-header">
+    <h2>Cathode Materials Discovery</h2>
+    <p>Na-ion cathode screening by capacity, voltage, fade, defect risk, phase stability,
+       oxygen risk, and estimated material cost.</p>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title"><span class="indicator"></span> Composition Space</div>
+
+      <div class="range-row">
+        <div class="range-header">
+          <span class="name">Na Content</span>
+          <span class="val" id="na-val">1.00</span>
+        </div>
+        <div class="range-desc">Sodium stoichiometry in Na_x(Mn,Fe)O2. Values near 1.0 represent a sodiated layered oxide; sodium deficiency increases phase and moisture sensitivity.</div>
+        <input type="range" id="na-slider" min="0.6" max="1.2" value="1.0" step="0.02" oninput="updateMat()">
+      </div>
+
+      <div class="range-row">
+        <div class="range-header">
+          <span class="name">Mn Fraction</span>
+          <span class="val" id="mn-val">0.50</span>
+        </div>
+        <div class="range-desc">Manganese fraction in the transition-metal layer. Mn can support capacity, but Mn3+ raises Jahn-Teller distortion and oxygen-risk penalties.</div>
+        <input type="range" id="mn-slider" min="0.1" max="0.9" value="0.5" step="0.05" oninput="updateMat()">
+      </div>
+
+      <div class="range-row">
+        <div class="range-header">
+          <span class="name">Fe Fraction</span>
+          <span class="val" id="fe-val">0.50</span>
+        </div>
+        <div class="range-desc">Iron fraction for the Fe3+/Fe4+ redox contribution. Fe raises voltage but shifts charge balance and migration penalties.</div>
+        <input type="range" id="fe-slider" min="0.1" max="0.9" value="0.5" step="0.05" oninput="updateMat()">
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="switch-row">
+        <div class="switch-label">
+          <span class="name">Dopant: Al³⁺ Substitution</span>
+          <span class="desc">Aluminium doping stabilizes the layered structure by suppressing the P2→O2 phase transition. Al³⁺ occupies octahedral sites without participating in redox, acting as structural pillars during deep desodiation.</span>
+        </div>
+        <label class="switch"><input type="checkbox" id="sw-al" onchange="updateMat()"><span class="slider"></span></label>
+      </div>
+
+      <div class="switch-row">
+        <div class="switch-label">
+          <span class="name">Dopant: Ti⁴⁺ Substitution</span>
+          <span class="desc">Titanium doping introduces a d⁰ cation that suppresses Jahn-Teller distortion by diluting the Mn³⁺ concentration. Also improves rate capability via reduced migration energy barriers for Na⁺ diffusion.</span>
+        </div>
+        <label class="switch"><input type="checkbox" id="sw-ti" onchange="updateMat()"><span class="slider"></span></label>
+      </div>
+
+      <div class="formula-box">
+        <div class="formula-title">Editable Screening Objective</div>
+        <code>score = wcap·Q0 + wstab·stability + wfade·(1-fade500) - wcost·cost/kWh - charge/defect penalties</code>
+        <div class="knob-grid">
+          <label>w capacity<input class="mini-input" id="mat-w-cap" type="number" value="0.32" step="0.02"></label>
+          <label>w stability<input class="mini-input" id="mat-w-stab" type="number" value="0.32" step="0.02"></label>
+          <label>w fade<input class="mini-input" id="mat-w-fade" type="number" value="0.22" step="0.02"></label>
+          <label>w cost<input class="mini-input" id="mat-w-cost" type="number" value="0.14" step="0.02"></label>
+          <label>upper V<input class="mini-input" id="mat-upper-v" type="number" value="4.10" step="0.05"></label>
+          <label>ehull slope<input class="mini-input" id="mat-ehull-slope" type="number" value="20" step="1"></label>
+        </div>
+      </div>
+
+      <div style="margin-top:1rem">
+        <button class="btn btn-primary" onclick="runScreening()">Screen Composition</button>
+        <button class="btn btn-ghost" onclick="exportMaterialsCSV()" type="button" style="margin-left:0.75rem">Download CSV</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title"><span class="indicator"></span> Pareto Front</div>
+        <div class="chart-box" id="mat-chart" style="height:280px"></div>
+      </div>
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title"><span class="indicator"></span> Composition Landscape</div>
+        <div class="chart-box" id="mat-landscape-chart" style="height:230px"></div>
+        <div class="readout-grid" id="mat-risk-readout"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title"><span class="indicator"></span> Predicted Properties</div>
+        <div class="grid-2">
+          <div class="stat">
+            <div class="val" id="mat-cap">--</div>
+            <div class="lbl">Specific Capacity (mAh/g)</div>
+          </div>
+          <div class="stat">
+            <div class="val" id="mat-volt">--</div>
+            <div class="lbl">Avg Discharge Voltage</div>
+          </div>
+          <div class="stat">
+            <div class="val" id="mat-stab">--</div>
+            <div class="lbl">Stability Score</div>
+          </div>
+          <div class="stat">
+            <div class="val" id="mat-jt">--</div>
+            <div class="lbl">JT Distortion Index</div>
+          </div>
+        </div>
+      </div>
+      <div class="decision-box" id="mat-decision">Screen a composition to see whether it is worth synthesizing or just worth simulating.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ── RECYCLING ──────────────────────────────── -->
+<section class="section" id="sec-recycling">
+  <div class="section-header">
+    <h2>Recycling Optimization</h2>
+    <p>Shrinking-core leaching model with acid order, particle-size dependence,
+       Arrhenius temperature scaling, recovery priors, and feedstock uncertainty.</p>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title"><span class="indicator"></span> Feedstock Parameters</div>
+
+      <div class="range-row">
+        <div class="range-header">
+          <span class="name">Black Mass (kg)</span>
+          <span class="val" id="bm-val">100</span>
+        </div>
+        <div class="range-desc">Total black-mass feedstock from shredded cells. Feedstock variation is propagated as assay and stream-composition uncertainty.</div>
+        <input type="range" id="bm-slider" min="10" max="500" value="100" step="10" oninput="updateRecycling()">
+      </div>
+
+      <div class="range-row">
+        <div class="range-header">
+          <span class="name">Acid Concentration (M)</span>
+          <span class="val" id="acid-val">2.0</span>
+        </div>
+        <div class="range-desc">Sulfuric acid molarity for hydrometallurgical leaching. The shrinking-core ODE model computes dissolution rate as a function of acid concentration, temperature, and particle size distribution.</div>
+        <input type="range" id="acid-slider" min="0.5" max="4.0" value="2.0" step="0.1" oninput="updateRecycling()">
+      </div>
+
+      <div class="range-row">
+        <div class="range-header">
+          <span class="name">Leaching Temperature</span>
+          <span class="val" id="leach-val">80°C</span>
+        </div>
+        <div class="range-desc">Leaching reactor temperature. Higher temperatures accelerate dissolution kinetics exponentially (Arrhenius) but increase energy cost and acid evaporation losses. Optimal range: 60-90°C for sulfuric acid route.</div>
+        <input type="range" id="leach-slider" min="40" max="100" value="80" step="5" oninput="updateRecycling()">
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="switch-row">
+        <div class="switch-label">
+          <span class="name">Monte Carlo Blending</span>
+          <span class="desc">Samples feedstock and assay variation to estimate a recovery interval without changing the underlying kinetics.</span>
+        </div>
+        <label class="switch"><input type="checkbox" id="sw-mc" checked onchange="updateRecycling()"><span class="slider"></span></label>
+      </div>
+
+      <div class="switch-row">
+        <div class="switch-label">
+          <span class="name">Bayesian Prior Update</span>
+          <span class="desc">When enabled, observed recovery outcomes from previous batches update the Beta-distributed recovery priors via conjugate Bayesian updates: Beta(α + successes, β + trials - successes). This closes the learning loop.</span>
+        </div>
+        <label class="switch"><input type="checkbox" id="sw-bayes" checked onchange="updateRecycling()"><span class="slider"></span></label>
+      </div>
+
+      <div class="formula-box">
+        <div class="formula-title">Editable Leaching Kinetics</div>
+        <code>1 - (1-X)^(1/3) = k0·Cacid^n·exp[-Ea/R(1/T-1/Tref)]·(50/Rp)^m·t</code>
+        <div class="knob-grid">
+          <label>leach min<input class="mini-input" id="rec-time" type="number" value="120" step="5"></label>
+          <label>particle um<input class="mini-input" id="rec-particle" type="number" value="50" step="5"></label>
+          <label>acid order<input class="mini-input" id="rec-acid-order" type="number" value="0.95" step="0.05"></label>
+          <label>Mn Ea J/mol<input class="mini-input" id="rec-ea-mn" type="number" value="27000" step="1000"></label>
+        </div>
+      </div>
+
+      <div style="margin-top:1rem">
+        <button class="btn btn-primary" onclick="runRecycling()">Optimize Recovery</button>
+        <button class="btn btn-ghost" onclick="exportRecyclingCSV()" type="button" style="margin-left:0.75rem">Download CSV</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title"><span class="indicator"></span> Recovery Rates</div>
+        <div class="chart-box" id="recycle-chart" style="height:220px;margin-bottom:1rem"></div>
+        <div id="recycle-bars" style="padding:0.5rem"></div>
+        <div class="readout-grid" id="recycle-readout"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title"><span class="indicator"></span> Process Log</div>
+        <div class="console" id="recycle-log">
+          <div class="info">Awaiting optimization...</div>
+        </div>
+      </div>
+      <div class="decision-box" id="recycle-decision">Run the recipe to get recovery, uncertainty interval, and whether the batch is economical.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ── ARCHITECTURE ───────────────────────────── -->
+<section class="section" id="sec-architecture">
+  <div class="section-header">
+    <h2>System Architecture</h2>
+    <p>Browser physics mirrors, Python model modules, validation checks, and API integration.</p>
+  </div>
+
+  <div class="grid-3" id="arch-grid"></div>
+
+  <div class="glow-line"></div>
+
+  <div class="panel" style="margin-top:1rem">
+    <div class="panel-title"><span class="indicator"></span> Model Registry</div>
+    <table class="tbl" id="model-table">
+      <thead>
+        <tr><th>Model</th><th>Type</th><th>Status</th><th>Data</th><th>Params</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ── API ────────────────────────────────────── -->
+<section class="section" id="sec-api">
+  <div class="section-header">
+    <h2>API Reference</h2>
+    <p>FastAPI service with bearer-token authentication, rate limiting,
+       and structured responses including uncertainty bounds and provenance metadata.</p>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title"><span class="indicator"></span> Endpoints</div>
+      <div id="api-endpoints"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><span class="indicator"></span> Response Preview</div>
+      <div class="console" id="api-response" style="min-height:400px">
+        <div class="info">Select an endpoint to preview response structure...</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── PLATFORM STATUS ────────────────────────── -->
+<section class="section" id="sec-platform">
+  <div class="section-header">
+    <h2>System Status</h2>
+    <p>Indexed data, runnable simulations, validation gates, and deployment status.</p>
+  </div>
+
+  <div class="grid-4" style="margin-bottom:1.5rem">
+    <div class="panel stat"><div class="val">5.09M</div><div class="lbl">Real Data Rows</div></div>
+    <div class="panel stat"><div class="val">555</div><div class="lbl">Battery Cells Tracked</div></div>
+    <div class="panel stat"><div class="val">11</div><div class="lbl">Dataset Keys</div></div>
+    <div class="panel stat"><div class="val">110</div><div class="lbl">Python Modules</div></div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title"><span class="indicator"></span> Data Corpus</div>
+      <table class="tbl">
+        <thead><tr><th>Dataset</th><th>Rows</th><th>Type</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>BatteryLife NA-ion</td><td>371,276</td><td>Cycling</td><td><span class="tag ok">Indexed</span></td></tr>
+          <tr><td>NASA PCoE</td><td>1,956</td><td>Impedance</td><td><span class="tag ok">Indexed</span></td></tr>
+          <tr><td>ISU-ILCC</td><td>4,904,065</td><td>Time-series</td><td><span class="tag ok">Indexed</span></td></tr>
+          <tr><td>UL_PUR</td><td>185,221</td><td>Cycle summary</td><td><span class="tag ok">Indexed</span></td></tr>
+          <tr><td>Real impedance summary</td><td>Indexed</td><td>EIS-derived table</td><td><span class="tag ok">Indexed</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title"><span class="indicator"></span> System Components</div>
+      <table class="tbl">
+        <thead><tr><th>Component</th><th>Module</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>UDE Cathode Physics</td><td>core/ude_wrapper.py</td><td><span class="tag ok">Active</span></td></tr>
+          <tr><td>P2-O2 Phase Transition</td><td>core/phase_transition.py</td><td><span class="tag ok">Active</span></td></tr>
+          <tr><td>TGN BMS Graph</td><td>modules/bms/graph_node.py</td><td><span class="tag ok">Active</span></td></tr>
+          <tr><td>EIS Extractor</td><td>modules/bms/eis_feature_extractor.py</td><td><span class="tag ok">Active</span></td></tr>
+          <tr><td>qNEHVI Screener</td><td>modules/cathode/screener.py</td><td><span class="tag ok">Active</span></td></tr>
+          <tr><td>Bayesian Recycling</td><td>modules/recycling/closed_loop_optimizer.py</td><td><span class="tag ok">Active</span></td></tr>
+          <tr><td>Stochastic Blender</td><td>modules/recycling/stochastic_blender.py</td><td><span class="tag ok">Active</span></td></tr>
+          <tr><td>Regional Climate</td><td>core/regional_climate.py</td><td><span class="tag ok">Active</span></td></tr>
+          <tr><td>Model Registry</td><td>core/model_registry.py</td><td><span class="tag ok">Active</span></td></tr>
+          <tr><td>Feature Store</td><td>core/feature_store.py</td><td><span class="tag ok">Active</span></td></tr>
+          <tr><td>Evidence Registry</td><td>core/evidence_registry.py</td><td><span class="tag ok">Active</span></td></tr>
+          <tr><td>India Context</td><td>core/india_context.py</td><td><span class="tag ok">Active</span></td></tr>
+          <tr><td>FastAPI Auth</td><td>api/auth.py</td><td><span class="tag ok">Active</span></td></tr>
+          <tr><td>Rate Limiter</td><td>api/rate_limiter.py</td><td><span class="tag ok">Active</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="glow-line"></div>
+
+  <div class="section-header">
+    <h2>Validation Gates</h2>
+    <p>Runnable simulations are separated from claims that still need real holdout or lab validation.</p>
+  </div>
+
+  <div class="panel" style="margin-bottom:1rem">
+      <div class="panel-title"><span class="indicator"></span> Highest-Value Compute Queue</div>
+    <table class="tbl">
+      <thead><tr><th>Job</th><th>Why It Matters</th><th>Budget</th><th>Output</th></tr></thead>
+      <tbody>
+        <tr><td>EIS-to-SOH TinyTCN</td><td>Uses impedance features that move before capacity drops.</td><td>4h</td><td>Rct/RSEI/Warburg calibrated SOH + risk head</td></tr>
+        <tr><td>UDE Residual Calibrator</td><td>Fits only missing physics, keeping Arrhenius/P2/JT terms explicit.</td><td>6h</td><td>Small residual model with mechanism attribution</td></tr>
+        <tr><td>Thermal Pack Surrogate</td><td>Calibrates the pack-risk model on generated thermal ODE cases until real pack labels exist.</td><td>6h</td><td>Low-latency BMS risk surrogate</td></tr>
+        <tr><td>qNEHVI Candidate Expansion</td><td>More useful than another generic NN: it improves which materials to synthesize next.</td><td>4h</td><td>Ranked cathode queue with uncertainty</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title"><span class="indicator"></span> Cathode Models</div>
+      <div class="switch-row"><div class="switch-label"><span class="name">M1: Cathode UDE</span><span class="desc">Universal Differential Equation with Na-ion physics (P2-O2, JT, SEI) plus bounded residual correction.</span></div><span class="tag ok">Runnable</span></div>
+      <div class="switch-row"><div class="switch-label"><span class="name">M2: SOH Estimator</span><span class="desc">Regression from recent capacity history and operating conditions. Estimates current state of health.</span></div><span class="tag ok">Runnable</span></div>
+      <div class="switch-row"><div class="switch-label"><span class="name">M3: Cycle Life Classifier</span><span class="desc">Early-cycle lifetime class estimate from the first-cycle window.</span></div><span class="tag ok">Runnable</span></div>
+      <div class="switch-row"><div class="switch-label"><span class="name">M4: Fade Rate Predictor</span><span class="desc">Local fade-rate regression from sliding capacity windows.</span></div><span class="tag ok">Runnable</span></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title"><span class="indicator"></span> BMS Models</div>
+      <div class="switch-row"><div class="switch-label"><span class="name">M5: BMS Pack Graph</span><span class="desc">Topology-aware thermal and EIS risk model. Needs real pack labels before safety-performance claims.</span></div><span class="tag warn">Label Gate</span></div>
+      <div class="switch-row"><div class="switch-label"><span class="name">M6: RUL Predictor</span><span class="desc">Remaining useful life regression from current capacity trajectory.</span></div><span class="tag ok">Runnable</span></div>
+      <div class="switch-row"><div class="switch-label"><span class="name">M7: Anomaly Autoencoder</span><span class="desc">Reconstruction error flags abnormal degradation behavior for investigation.</span></div><span class="tag ok">Runnable</span></div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:1rem">
+    <div class="panel-title"><span class="indicator"></span> Multi-Task Models</div>
+    <div class="grid-3">
+      <div class="switch-row"><div class="switch-label"><span class="name">M8: Joint SOH+RUL+Fade</span><span class="desc">Shared model head for SOH, RUL, and fade-rate estimates.</span></div><span class="tag ok">Runnable</span></div>
+      <div class="switch-row"><div class="switch-label"><span class="name">M9: Knee Point Detector</span><span class="desc">Detects accelerated-aging onset from capacity curves.</span></div><span class="tag ok">Runnable</span></div>
+      <div class="switch-row"><div class="switch-label"><span class="name">M10: Chemistry Ranker</span><span class="desc">Ranks cathode chemistries under the same operating assumptions.</span></div><span class="tag ok">Runnable</span></div>
+    </div>
+  </div>
+</section>
+
+<div class="assistant-dock" id="assistant-dock">
+  <button class="assistant-launch" id="assistant-launch" type="button" title="Open assistant" aria-label="Open assistant">
+    ?
+  </button>
+  <div class="assistant-panel" id="assistant-panel" aria-label="KineticsForge assistant">
+    <div class="assistant-head">
+      <div>
+        <div class="assistant-title">KineticsForge Assist</div>
+        <div class="assistant-status"><span class="mini-dot"></span> Memory off</div>
+      </div>
+      <button class="assistant-close" id="assistant-close" type="button" title="Close assistant" aria-label="Close assistant">x</button>
+    </div>
+    <div class="assistant-body" id="assistant-body">
+      <div class="assistant-msg bot">Ask about a highlighted cell, a plot, an equation, or what to change next.</div>
+      <div class="assistant-prompts">
+        <button type="button" data-q="How do I use this app?">Use app</button>
+        <button type="button" data-q="What is the mechanism state map?">Mechanism map</button>
+        <button type="button" data-q="What does the highlighted cell mean?">Cell highlight</button>
+        <button type="button" data-q="What should I validate before making strong claims?">Validation</button>
+      </div>
+    </div>
+    <form class="assistant-form" id="assistant-form">
+      <input id="assistant-input" type="text" maxlength="1200" autocomplete="off" placeholder="Ask KineticsForge..." aria-label="Ask KineticsForge">
+      <button type="submit">Send</button>
+    </form>
+    <div class="assistant-foot" id="assistant-foot">Cloud assistant uses server-side OpenRouter. Memory off.</div>
+  </div>
+</div>
+
+<footer class="footer">
+  KineticsForge — Simulation-backed, real-data benchmarked.
+  All predictions carry uncertainty bounds and provenance metadata.
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

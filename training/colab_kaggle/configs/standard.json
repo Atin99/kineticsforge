@@ -1,0 +1,8 @@
+{
+  "profile": "standard",
+  "target_runtime": "1-3 hours on free GPU",
+  "device": "auto",
+  "data_profile": "foundation",
+  "training_profile": "standard",
+  "notes": "Main free-resource training run."
+}

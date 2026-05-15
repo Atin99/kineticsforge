@@ -1,0 +1,8 @@
+{
+  "profile": "deep",
+  "target_runtime": "6-10 hours on Kaggle T4 or Colab session",
+  "device": "auto",
+  "data_profile": "foundation",
+  "training_profile": "deep",
+  "notes": "Use after standard run has clean losses and checkpoints."
+}
