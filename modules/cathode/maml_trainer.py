@@ -3,11 +3,21 @@ import torch.nn as nn
 from copy import deepcopy
 
 class MAMLTrainer:
-    def __init__(self, model, inner_lr=0.01, meta_lr=0.001, inner_steps=5):
+    """First-order MAML trainer.
+
+    This implementation adapts a cloned model per task and transfers query
+    gradients back to the meta model. That is FOMAML by design; it does not
+    claim second-order MAML gradients through the inner optimizer.
+    """
+
+    def __init__(self, model, inner_lr=0.01, meta_lr=0.001, inner_steps=5, first_order=True):
         self.model = model
         self.inner_lr = inner_lr
         self.meta_optimizer = torch.optim.Adam(self.model.parameters(), lr=meta_lr)
         self.inner_steps = inner_steps
+        self.first_order = first_order
+        if not first_order:
+            raise NotImplementedError("Second-order MAML needs a differentiable inner update; use FOMAML here or core_trainer.py.")
     def clone_model(self):
         return deepcopy(self.model)
     def inner_loop(self, task_support, cloned_model):
@@ -17,6 +27,7 @@ class MAMLTrainer:
             pred = cloned_model(*x)
             loss = nn.functional.mse_loss(pred, y)
             optimizer.zero_grad()
+            # FOMAML intentionally avoids create_graph=True in the inner loop.
             loss.backward()
             optimizer.step()
         return cloned_model

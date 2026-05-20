@@ -72,12 +72,29 @@ class P2O2PhaseTransition(nn.Module):
 
 
 class NaDesolvationBarrier(nn.Module):
+    """Na+ desolvation barrier model for layered oxide cathodes.
+    
+    Physical basis: Na+ must shed its solvation shell (typically 4-6 carbonate
+    molecules in EC/PC electrolytes) before intercalating. The energy barrier
+    for this process is 0.4-0.6 eV for Na+ (vs ~0.25-0.35 eV for Li+) due to
+    Na+'s larger ionic radius creating stronger ion-dipole interactions.
+    
+    References:
+        - Jian et al., Adv. Energy Mater. 2016: 0.5-0.6 eV for Na+ in PC
+        - Komaba et al., Chem. Rev. 2014: Na+ desolvation dominates at low T
+        - Okoshi et al., J. Electrochem. Soc. 2017: DFT-computed barriers
+    
+    Note: 0.18 eV (the old value) is the barrier for Na+ migration through
+    the SEI layer, which is a different process entirely.
+    """
     def __init__(self):
         super().__init__()
-        self.base_barrier_eV = nn.Parameter(torch.tensor(0.18))
-        self.mn_penalty = nn.Parameter(torch.tensor(0.025))
-        self.fe_relief = nn.Parameter(torch.tensor(0.014))
-        self.dopant_relief = nn.Parameter(torch.tensor(0.050))
+        # Initialized at physical value: 0.50 eV (middle of 0.4-0.6 range)
+        # Learnable so training can adjust to specific electrolyte systems
+        self.base_barrier_eV = nn.Parameter(torch.tensor(0.50))
+        self.mn_penalty = nn.Parameter(torch.tensor(0.025))  # Mn3+ distorts intercalation sites
+        self.fe_relief = nn.Parameter(torch.tensor(0.014))    # Fe stabilizes local structure
+        self.dopant_relief = nn.Parameter(torch.tensor(0.050))  # dopants widen Na+ channels
         self.beta_base = nn.Parameter(torch.tensor(0.48))
 
     def barrier(self, composition: torch.Tensor, temperature_K: torch.Tensor, soc: torch.Tensor) -> torch.Tensor:
@@ -99,7 +116,18 @@ class NaDesolvationBarrier(nn.Module):
 
 
 class NaIonDegradationPhysics(nn.Module):
-    def __init__(self):
+    """Composite Na-ion degradation physics module.
+    
+    Combines JT coupling, P2-O2 phase transition, and desolvation barrier
+    into a single differentiable vector field for the UDE.
+    
+    The C-rate (charging/discharging current relative to capacity) is now
+    a required parameter rather than hardcoded, because:
+    - SOC dynamics (dx/dt) depend directly on I_app
+    - Higher C-rates cause faster Na+ extraction → different phase behavior
+    - The P2→O2 transition onset depends on how quickly x_Na drops
+    """
+    def __init__(self, Q_nominal_mAh: float = 130.0):
         super().__init__()
         self.jahn_teller = JahnTellerCoupling()
         self.phase_transition = P2O2PhaseTransition()
@@ -108,6 +136,9 @@ class NaIonDegradationPhysics(nn.Module):
         self.phase_capacity_scale = nn.Parameter(torch.tensor(0.65))
         self.jt_capacity_scale = nn.Parameter(torch.tensor(7.5e-4))
         self.desolvation_capacity_scale = nn.Parameter(torch.tensor(2.5e-4))
+        # Nominal capacity in mAh — used to compute I_app from C-rate
+        # For typical P2-type NaMnO2 cathodes: 100-160 mAh/g
+        self.Q_nominal_mAh = Q_nominal_mAh
 
     def forward(
         self,
@@ -116,6 +147,7 @@ class NaIonDegradationPhysics(nn.Module):
         temperature_K: torch.Tensor,
         t: torch.Tensor,
         base_arrhenius_rate: torch.Tensor,
+        c_rate: float = 1.0,
     ) -> tuple[torch.Tensor, dict]:
         batch = state.shape[0]
         comp = _as_batch(composition, batch, state.device)
@@ -134,7 +166,14 @@ class NaIonDegradationPhysics(nn.Module):
             + torch.abs(self.jt_capacity_scale) * jt
             + torch.abs(self.desolvation_capacity_scale) * torch.log1p(desolv)
         )
-        I_app = torch.ones_like(Q) * 0.001
+        # I_app from C-rate and nominal capacity: I = C_rate * Q_nominal / 3600
+        # This makes the SOC dynamics (dx/dt) properly C-rate dependent.
+        # At 1C with 130 mAh/g: I_app ≈ 0.036 A/g (36 mA/g)
+        # The old hardcoded 0.001 A was ~0.03C — almost no current.
+        I_app = torch.ones_like(Q) * (c_rate * self.Q_nominal_mAh / 3600.0)
+        # dx/dt: rate of Na extraction from cathode
+        # Negative sign: during charging, Na is extracted (x decreases)
+        # beta modulates the insertion asymmetry (Butler-Volmer transfer coefficient)
         dxdt = -I_app * (1.0 + 0.2 * (0.5 - beta)) / (Q * 96485.0 + 1e-10)
         dVdt = -0.014 * p2o2_rate - 0.0025 * jt - 0.0007 * torch.log1p(desolv)
         dstate = torch.cat([dQdt, dVdt, dxdt], dim=-1)
@@ -144,5 +183,6 @@ class NaIonDegradationPhysics(nn.Module):
             "jahn_teller_factor": jt,
             "na_desolvation_factor": desolv,
             "dynamic_bv_beta": beta,
+            "applied_current_A": I_app,
         }
         return dstate, diagnostics

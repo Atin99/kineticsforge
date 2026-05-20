@@ -7,27 +7,38 @@ class BrownianMotion:
         self.t0 = t0
         self.w0 = w0
         self.dt = dt
-        self.cache = {t0: w0}
+        self.cache = {0: w0}
+
+    def _key(self, t):
+        if abs(self.dt) < 1e-12:
+            return 0
+        return int(round((float(t) - float(self.t0)) / float(self.dt)))
+
+    def _time(self, key):
+        return float(self.t0) + key * float(self.dt)
         
     def __call__(self, t):
-        if t in self.cache:
-            return self.cache[t]
+        key = self._key(t)
+        if key in self.cache:
+            return self.cache[key]
         
-        t_prev = max([k for k in self.cache.keys() if k < t], default=self.t0)
-        t_next = min([k for k in self.cache.keys() if k > t], default=float('inf'))
+        k_prev = max([k for k in self.cache.keys() if k < key], default=0)
+        k_next = min([k for k in self.cache.keys() if k > key], default=None)
+        t_prev = self._time(k_prev)
+        t_next = self._time(k_next) if k_next is not None else float('inf')
         
         if t_next == float('inf'):
-            w_prev = self.cache[t_prev]
-            w_t = w_prev + torch.randn_like(w_prev) * math.sqrt(t - t_prev)
-            self.cache[t] = w_t
+            w_prev = self.cache[k_prev]
+            w_t = w_prev + torch.randn_like(w_prev) * math.sqrt(abs(t - t_prev))
+            self.cache[key] = w_t
             return w_t
             
-        w_prev = self.cache[t_prev]
-        w_next = self.cache[t_next]
+        w_prev = self.cache[k_prev]
+        w_next = self.cache[k_next]
         mean = w_prev + (t - t_prev) / (t_next - t_prev) * (w_next - w_prev)
-        var = (t - t_prev) * (t_next - t) / (t_next - t_prev)
-        w_t = mean + torch.randn_like(w_prev) * math.sqrt(var)
-        self.cache[t] = w_t
+        var = abs((t - t_prev) * (t_next - t) / (t_next - t_prev))
+        w_t = mean + torch.randn_like(w_prev) * math.sqrt(max(var, 0.0))
+        self.cache[key] = w_t
         return w_t
 
 class EulerMaruyama(nn.Module):

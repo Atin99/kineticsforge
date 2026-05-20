@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 *.pyo
 _pydeps/
+.playwright-cli/
 .env
 *.zip
 *.pt
@@ -18,5 +19,10 @@ kaggle_deploy/phase2_data_v2/
 *.egg-info/
 dist/
 build/
+artifacts/
 .DS_Store
 Thumbs.db
+*.npz
+kaggle_deploy_2/*_zip/
+kaggle_deploy_3/acct_zip/
+.pytest_cache/

@@ -21,8 +21,8 @@ try {
 Write-Host "[1/3] Checking dependencies..." -ForegroundColor Yellow
 $hasFastapi = pip show fastapi 2>$null
 if (-not $hasFastapi) {
-    Write-Host "       Installing fastapi, uvicorn, numpy, pydantic..." -ForegroundColor Gray
-    pip install fastapi "uvicorn[standard]" numpy pydantic --quiet 2>$null
+    Write-Host "       Installing deploy dependencies..." -ForegroundColor Gray
+    pip install -r requirements-deploy.txt --quiet 2>$null
 }
 
 # Extract checkpoints
@@ -51,4 +51,4 @@ Write-Host ""
 Start-Process "http://localhost:8000"
 
 # Start server
-python serve_lite.py
+python serve.py

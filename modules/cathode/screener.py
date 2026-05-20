@@ -183,7 +183,9 @@ def _score_composition(comp: Dict, T: float, cost_model: CostModel,
     if comp["dopant"]:
         ce += 0.001
 
-    avg_voltage = 3.3 + 0.2 * comp["Fe"] - 0.1 * comp["Mn"]
+    mn_w = comp["Mn"] / max(comp["Mn"] + comp["Fe"], 0.01)
+    fe_w = comp["Fe"] / max(comp["Mn"] + comp["Fe"], 0.01)
+    avg_voltage = mn_w * 3.75 + fe_w * 3.20 + 0.15 * (1.0 - comp["Na"])
     energy_density = q0_adj * avg_voltage
     vol_change = (2.0 + 3.0 * comp["Mn"] - 1.0 * comp["Fe"]) * vol_mult
     if comp["dopant"] == "Ti":

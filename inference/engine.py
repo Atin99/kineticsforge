@@ -7,15 +7,12 @@ import os
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Optional, Any, List, Tuple
+from typing import Dict, Optional, Any, List
 
 import torch
 import numpy as np
 
-from inference.models import (
-    MODEL_CLASSES, CHECKPOINT_NAMES,
-    CathodeUDE, SOHModel, JointModel, RULModel, KneeDetector
-)
+from inference.models import MODEL_CLASSES, CHECKPOINT_NAMES
 
 logger = logging.getLogger("kineticsforge.inference")
 
@@ -23,7 +20,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 class ModelHub:
-    """Loads and caches all 10 trained models with graceful fallback."""
+    """Loads and caches M1-M14 trained models with graceful fallback."""
 
     def __init__(self, checkpoint_dirs: Optional[List[str]] = None):
         self.models: Dict[str, torch.nn.Module] = {}
@@ -37,16 +34,20 @@ class ModelHub:
             str(root / "checkpoints" / "trained"),
             str(root / "checkpoints"),
         ]
-        # Also scan kaggle_deploy results
-        deploy = root.parent / "kaggle_deploy"
-        if deploy.exists():
-            for sub in ["acct1_zip", "acct2_zip", "acct3_zip"]:
+        # Also scan in-repo Kaggle deployment outputs. Earlier code looked one
+        # directory too high, so locally extracted result folders were invisible.
+        for deploy in (root / "kaggle_deploy", root / "kaggle_deploy_2", root / "kaggle_deploy_3"):
+            if not deploy.exists():
+                continue
+            dirs.append(str(deploy))
+            for sub in ("acct1_zip", "acct2_zip", "acct3_zip", "acct_zip"):
                 d = deploy / sub
-                if d.exists():
-                    dirs.append(str(d))
-                    for child in d.iterdir():
-                        if child.is_dir():
-                            dirs.append(str(child))
+                if not d.exists():
+                    continue
+                dirs.append(str(d))
+                for child in d.iterdir():
+                    if child.is_dir():
+                        dirs.append(str(child))
         return dirs
 
     def _find_checkpoint(self, model_name: str) -> Optional[str]:
@@ -67,7 +68,14 @@ class ModelHub:
                 model = cls()
                 ckpt_path = self._find_checkpoint(name)
                 if ckpt_path:
-                    state = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
+                    # Try safe loading first (weights_only=True prevents arbitrary code execution)
+                    try:
+                        state = torch.load(ckpt_path, map_location=DEVICE, weights_only=True)
+                    except Exception:
+                        # Fallback for legacy checkpoints that contain non-tensor objects
+                        logger.warning(f"{name}: falling back to weights_only=False for {ckpt_path} — "
+                                       "consider re-saving this checkpoint safely")
+                        state = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
                     if isinstance(state, dict) and "model" in state:
                         state = state["model"]
                     model.load_state_dict(state, strict=False)
@@ -105,53 +113,77 @@ class ModelHub:
 
 # ── PREDICTION FUNCTIONS ─────────────────────────
 
+def _m1_forward_probe(model: torch.nn.Module, c_rate: float, temperature_C: float) -> Dict[str, float]:
+    """Call the trained M1 UDE once and expose its derivative/gate output.
+
+    This is intentionally a probe, not a fake capacity correction. The capacity
+    trajectory below comes from the same production Na-ion physics used by the
+    API. The probe proves the checkpointed M1 network is live and gives a
+    bounded neural derivative readout for downstream runtimes.
+    """
+    with torch.no_grad():
+        cond = torch.tensor([[temperature_C / 50.0, c_rate, 1.0, 0.0, 0.0]], dtype=torch.float32, device=DEVICE)
+        feat = torch.zeros(1, 27, dtype=torch.float32, device=DEVICE)
+        state = torch.tensor([[1.0, 0.04]], dtype=torch.float32, device=DEVICE)
+        z = model.cond_embed(cond)
+        fz = model.feat_embed(feat)
+        t = torch.tensor(0.0, dtype=torch.float32, device=DEVICE)
+        deriv = model(t, state, z, fz)
+        inp = torch.cat([state, z, fz, torch.zeros_like(state[:, :1])], dim=-1)
+        gate = model.gate(inp)
+    return {
+        "dQ_dt": float(deriv[0, 0]),
+        "dR_dt": float(deriv[0, 1]),
+        "gate_physics": float(gate[0, 0]),
+        "gate_neural": float(1.0 - gate[0, 0]),
+    }
+
+
 def predict_degradation(hub: ModelHub, temperature_C: float = 45.0,
                         c_rate: float = 1.0, n_cycles: int = 500,
                         enable_p2o2: bool = True, enable_jt: bool = True,
-                        enable_sei: bool = True) -> Dict[str, Any]:
-    """Run cathode degradation prediction using M1 UDE or physics fallback."""
-    model = hub.get("M1_CathodeUDE")
-    T = temperature_C + 273.15
-    Ea = 0.3
-    R = 8.314e-3
-    kRef = 2e-4
+                        enable_sei: bool = True,
+                        na: float = 1.02, mn: float = 0.52, fe: float = 0.43,
+                        dopant_frac: float = 0.05) -> Dict[str, Any]:
+    """Run degradation using the production Na-ion physics plus M1 probe.
 
-    # Physics-based simulation (works with or without trained model)
-    Q = 1.0
-    curve = [Q]
-    for i in range(1, n_cycles + 1):
-        dQ = 0
-        if enable_sei:
-            k_sei = kRef * np.exp(-Ea / (R * T))
-            dQ -= k_sei * np.sqrt(i) * 0.001 * c_rate
-        if enable_p2o2:
-            dQ -= 0.00005 * (1 + 0.5 * np.sin(i * 0.01)) * c_rate
-        if enable_jt:
-            dQ -= 0.00003 * (1 + 0.1 * Q) * np.exp(-0.2 / (R * T))
-        # Neural correction if model is trained
-        if model and hub.loaded_from.get("M1_CathodeUDE") != "scaffold":
-            dQ -= 0.00002 * (i / n_cycles) ** 1.5 * (1 + 0.5 * c_rate)
-        Q = max(0.3, Q + dQ)
-        curve.append(Q)
+    Older code used toy sine-wave and hardcoded polynomial terms. That is gone.
+    The trajectory now delegates to serve_lite.simulate_degradation so the
+    full/checkpoint path and API path share the same Na-ion physics.
+    """
+    from serve_lite import DegradationRequest, simulate_degradation
 
-    knee = -1
-    for i in range(2, len(curve)):
-        d2 = curve[i] - 2 * curve[i-1] + curve[i-2]
-        if d2 < -0.0001:
-            knee = i
-            break
-
-    rul80 = next((i for i, v in enumerate(curve) if v < 0.8), -1)
-
-    return {
-        "capacity_curve": curve,
-        "eol_capacity": curve[-1],
-        "fade_pct": 1.0 - curve[-1],
-        "knee_point": knee if knee > 0 else None,
-        "rul_at_80pct": rul80 if rul80 > 0 else None,
-        "cycles": n_cycles,
+    req = DegradationRequest(
+        temperature_C=temperature_C,
+        c_rate=c_rate,
+        cycles=n_cycles,
+        enable_p2o2=enable_p2o2,
+        enable_jt=enable_jt,
+        enable_sei=enable_sei,
+        enable_neural=False,
+        na=na,
+        mn=mn,
+        fe=fe,
+        dopant_frac=dopant_frac,
+    )
+    result = simulate_degradation(req)
+    out = {
+        "capacity_curve": result["curve_sampled"],
+        "voltage_curve": result["voltage_sampled"],
+        "eol_capacity": result["capacity_end"],
+        "fade_pct": result["fade_pct"],
+        "knee_point": result["knee_point"],
+        "rul_at_80pct": result["rul_at_80pct"],
+        "cycles": result["cycles"],
+        "mechanisms": result["mechanisms"],
+        "composition": result["composition"],
+        "physics_source": "serve_lite.simulate_degradation",
         "model_source": hub.loaded_from.get("M1_CathodeUDE", "unknown"),
     }
+    model = hub.get("M1_CathodeUDE")
+    if model is not None and hub.loaded_from.get("M1_CathodeUDE") not in {"scaffold", None}:
+        out["m1_forward_probe"] = _m1_forward_probe(model, c_rate=c_rate, temperature_C=temperature_C)
+    return out
 
 
 def predict_soh(hub: ModelHub, capacity_history: List[float],
@@ -194,3 +226,114 @@ def predict_rul(hub: ModelHub, capacity_history: List[float],
         pred = float(model(hist, feat, cond, cf))
 
     return {"rul_fraction": pred, "source": hub.loaded_from.get("M6_RUL", "unknown")}
+
+
+def _pad(values: List[float], width: int, fill: float = 0.0) -> List[float]:
+    clean = [float(v) for v in values if np.isfinite(float(v))]
+    if not clean:
+        clean = [fill]
+    if len(clean) >= width:
+        return clean[-width:]
+    return [clean[0]] * (width - len(clean)) + clean
+
+
+def _as_feature_tensor(feature_vector: List[float], feature_mask: Optional[List[int]] = None) -> torch.Tensor:
+    values = _pad(feature_vector[:27], 27)
+    mask = _pad([float(x) for x in (feature_mask or [1] * 27)[:27]], 27, fill=0.0)
+    return torch.tensor([v * m for v, m in zip(values, mask)], dtype=torch.float32, device=DEVICE).unsqueeze(0)
+
+
+def _condition_tensor(conditions: Optional[List[float]], feature_vector: List[float]) -> torch.Tensor:
+    # [temperature_scaled, c_rate, DOD, chemistry_id_or_aux, form_factor_or_aux]
+    if conditions:
+        vals = _pad(conditions[:5], 5)
+    else:
+        temp_c = feature_vector[5] if len(feature_vector) > 5 and np.isfinite(feature_vector[5]) else 25.0
+        c_rate = feature_vector[6] if len(feature_vector) > 6 and np.isfinite(feature_vector[6]) else 1.0
+        vals = [temp_c / 50.0, c_rate, 1.0, 0.0, 0.0]
+    return torch.tensor(vals, dtype=torch.float32, device=DEVICE).unsqueeze(0)
+
+
+def predict_byod_features(
+    hub: ModelHub,
+    feature_vector: List[float],
+    feature_mask: Optional[List[int]] = None,
+    capacity_history: Optional[List[float]] = None,
+    conditions: Optional[List[float]] = None,
+) -> Dict[str, Any]:
+    """Run checkpoint-backed BYOD inference on a canonical 27-feature vector.
+
+    The lite FastAPI service intentionally avoids torch. This function is for
+    the full Python path, offline pilots, notebooks, or GPU workers. Missing
+    fields are masked before inference so absent EIS/cycler columns are not
+    silently treated as real zeros.
+    """
+    feat = _as_feature_tensor(feature_vector, feature_mask)
+    cond = _condition_tensor(conditions, feature_vector)
+    hist_seed = feature_vector[14] if len(feature_vector) > 14 and np.isfinite(feature_vector[14]) else 1.0
+    hist20 = torch.tensor(_pad(capacity_history or [hist_seed], 20, 1.0), dtype=torch.float32, device=DEVICE).unsqueeze(0)
+    hist30 = torch.tensor(_pad(capacity_history or [hist_seed], 30, 1.0), dtype=torch.float32, device=DEVICE).unsqueeze(0)
+    observed_cycles = feature_vector[15] if len(feature_vector) > 15 and np.isfinite(feature_vector[15]) else 0.0
+    cycle_fraction = torch.tensor([min(max(float(observed_cycles) / 1000.0, 0.0), 1.0)], dtype=torch.float32, device=DEVICE)
+
+    outputs: Dict[str, Any] = {
+        "runtime": DEVICE,
+        "models": {},
+        "loaded_from": hub.loaded_from,
+        "mask_present": int(sum(1 for x in (feature_mask or []) if x)),
+    }
+
+    def run(name: str, fn):
+        model = hub.get(name)
+        if model is None:
+            outputs["models"][name] = {"status": "not_loaded"}
+            return
+        try:
+            with torch.no_grad():
+                outputs["models"][name] = fn(model)
+                outputs["models"][name]["checkpoint"] = hub.loaded_from.get(name, "unknown")
+        except Exception as exc:
+            outputs["models"][name] = {"status": "error", "detail": str(exc)}
+
+    def run_m1(model):
+        z = model.cond_embed(cond)
+        fz = model.feat_embed(feat)
+        r0 = feature_vector[4] if len(feature_vector) > 4 and np.isfinite(feature_vector[4]) else 0.04
+        state = torch.tensor([[float(hist20[0, -1]), float(r0)]], dtype=torch.float32, device=DEVICE)
+        deriv = model(cycle_fraction[0], state, z, fz)
+        inp = torch.cat([state, z, fz, cycle_fraction.reshape(1, 1)], dim=-1)
+        gate = model.gate(inp)
+        return {
+            "dQ_dt": float(deriv[0, 0]),
+            "dR_dt": float(deriv[0, 1]),
+            "gate_physics": float(gate[0, 0]),
+            "gate_neural": float(1.0 - gate[0, 0]),
+            "projected_soh_500": float(np.clip(float(hist20[0, -1]) + float(deriv[0, 0]) * 0.5, 0.0, 1.05)),
+            "status": "ok",
+        }
+
+    run("M1_CathodeUDE", run_m1)
+    run("M2_SOH", lambda m: {"soh": float(m(hist20, feat, cond, cycle_fraction)), "status": "ok"})
+    run("M4_FadeRate", lambda m: {"fade_rate": float(m(hist20, feat, cond)), "status": "ok"})
+    run("M6_RUL", lambda m: {"rul_fraction": float(m(hist20, feat, cond, cycle_fraction)), "status": "ok"})
+    run("M8_Joint_SOH_RUL", lambda m: (lambda y: {"soh": float(y[0]), "rul_fraction": float(y[1]), "fade_rate": float(y[2]), "status": "ok"})(m(hist30, feat, cond, cycle_fraction)))
+
+    def run_m11(model):
+        r_ohm = max(float(feature_vector[4]) if len(feature_vector) > 4 and np.isfinite(feature_vector[4]) else 0.04, 1e-4)
+        temp_c = float(feature_vector[5]) if len(feature_vector) > 5 and np.isfinite(feature_vector[5]) else 25.0
+        soh = float(feature_vector[14]) if len(feature_vector) > 14 and np.isfinite(feature_vector[14]) else 1.0
+        eis = torch.tensor([[r_ohm, r_ohm * 1.8, max(0.002, (1.0 - soh) * 0.05), 0.01, temp_c / 50.0, 0.5, float(cycle_fraction[0])]], dtype=torch.float32, device=DEVICE)
+        deg, plating, safe_crate = model(eis)
+        return {
+            "electrolyte_degradation": float(torch.sigmoid(deg)[0]),
+            "sodium_plating_probability": float(torch.sigmoid(plating)[0]),
+            "recommended_c_rate": float(safe_crate[0]),
+            "status": "ok",
+            "imputed_eis": True,
+        }
+
+    run("M11_ElectrolyteHealth", run_m11)
+    run("M12_Replenishability", lambda m: (lambda y: {"recovery_probability": float(torch.sigmoid(y[0])[0]), "expected_recovery_fraction": float(y[1][0]), "status": "ok"})(m(hist20, feat[:, :10])))
+    run("M13_ChemIdentifier", lambda m: (lambda logits: {"class_id": int(torch.argmax(logits, dim=-1)[0]), "confidence": float(torch.softmax(logits, dim=-1).max()), "status": "ok"})(m(feat, cond[:, :4])))
+    run("M14_FormationProtocol", lambda m: (lambda y: {"life_index": float(torch.sigmoid(y[0])[0]), "robustness_index": float(torch.sigmoid(y[1])[0]), "sei_quality": float(torch.sigmoid(y[2])[0]), "status": "ok"})(m(feat, cond)))
+    return outputs

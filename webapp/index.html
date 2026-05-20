@@ -18,6 +18,8 @@
   </a>
   <div class="nav-links">
     <a href="#" onclick="navigate('diagnostics')" id="nav-diagnostics">Diagnostics</a>
+    <a href="#" onclick="navigate('upload')" id="nav-upload">Upload</a>
+    <a href="#" onclick="navigate('decisions')" id="nav-decisions">Decisions</a>
     <a href="#" onclick="navigate('bms')" id="nav-bms">BMS</a>
     <a href="#" onclick="navigate('materials')" id="nav-materials">Materials</a>
     <a href="#" onclick="navigate('recycling')" id="nav-recycling">Recycling</a>
@@ -44,9 +46,9 @@
     </p>
     <div class="hero-operating">
       <div><span>Diagnostics</span> SOH, knee point, and dominant loss terms from T, C-rate, cycle count, and editable kinetics.</div>
+      <div><span>Upload</span> CSV/XLSX schema fingerprinting, tier-1 feature extraction, dQ/dV peaks, and exportable results.</div>
       <div><span>BMS</span> Battery Management System simulation: thermal propagation, EIS drift, risk, and action threshold.</div>
       <div><span>Materials</span> Na-ion cathode ranking by capacity, stability, fade, cost, and defect risk.</div>
-      <div><span>Recycling</span> Leach time, acid, temperature, particle size, recovery uncertainty, and batch economics.</div>
     </div>
     <div class="hero-metrics">
       <div class="hero-metric">
@@ -68,6 +70,7 @@
     </div>
     <div class="hero-cta">
       <button class="btn btn-primary" onclick="navigate('diagnostics')">Launch Diagnostics</button>
+      <button class="btn btn-ghost" onclick="navigate('decisions')">Decision Console</button>
       <button class="btn btn-ghost" onclick="navigate('architecture')">View Architecture</button>
     </div>
   </div>
@@ -99,7 +102,7 @@
           <span class="name">C-Rate</span>
           <span class="val" id="crate-val">1.0C</span>
         </div>
-        <div class="range-desc">Charge/discharge rate relative to capacity. Higher C-rates induce lithium plating and accelerated mechanical stress on cathode particles. Industrial BMS typically operates at 0.5–2C.</div>
+        <div class="range-desc">Charge/discharge rate relative to capacity. Higher C-rates induce sodium metal deposition and accelerated mechanical stress on cathode particles. Industrial BMS typically operates at 0.5–2C.</div>
         <input type="range" id="crate-slider" min="0.2" max="3" value="1.0" step="0.1" oninput="updateDiag()">
       </div>
 
@@ -144,7 +147,7 @@
       <div class="switch-row">
         <div class="switch-label">
           <span class="name">SEI Growth Model</span>
-          <span class="desc">Solid Electrolyte Interphase growth follows √t kinetics with Arrhenius temperature dependence. The SEI layer consumes active lithium/sodium ions, causing irreversible capacity loss proportional to film thickness.</span>
+          <span class="desc">Solid Electrolyte Interphase growth follows √t kinetics with Arrhenius temperature dependence. The SEI layer consumes mobile sodium inventory, causing irreversible capacity loss proportional to film thickness.</span>
         </div>
         <label class="switch"><input type="checkbox" id="sw-sei" checked onchange="updateDiag()"><span class="slider"></span></label>
       </div>
@@ -182,6 +185,7 @@
         <div style="margin-top:0.75rem;display:flex;gap:0.75rem;flex-wrap:wrap">
           <button class="btn btn-ghost" onclick="calibrateDiagnostics()" type="button">Calibrate</button>
           <button class="btn btn-ghost" onclick="exportDiagnosticsCSV()" type="button">Download CSV</button>
+          <button class="btn btn-ghost" onclick="exportDiagnosticsJSON()" type="button">Download JSON</button>
         </div>
         <div class="plot-note" id="diag-cal-result"></div>
         <div class="chart-box" id="diag-cal-chart" style="height:180px;margin-top:0.75rem"></div>
@@ -210,6 +214,13 @@
         <div class="chart-box" id="diag-phase-chart" style="height:210px"></div>
         <div class="plot-note" id="diag-map-note">Cycle is horizontal, SOC band is vertical, color is the dominant degradation channel, and brightness is stress intensity.</div>
       </div>
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title"><span class="indicator"></span> Mechanism Attribution</div>
+        <div style="display:flex;align-items:center;gap:1.2rem;flex-wrap:wrap">
+          <canvas id="diag-pie-canvas" width="220" height="220" style="flex-shrink:0"></canvas>
+          <div id="diag-pie-legend" style="font-size:0.78rem;line-height:1.8;color:#aaa">Run the simulation to see mechanism breakdown.</div>
+        </div>
+      </div>
       <div class="decision-box" id="diag-decision">Run the simulation to see the dominant failure mechanism and experiment recommendation.</div>
       <div class="grid-2">
         <div class="panel stat">
@@ -229,11 +240,138 @@
           <div class="lbl">RUL at 80% SOH</div>
         </div>
       </div>
+      <div id="diag-confidence"></div>
+      <div style="margin-top:1rem">
+        <button class="btn btn-ghost" onclick="generateReport()" type="button">📄 Generate Report</button>
+      </div>
     </div>
   </div>
 </section>
 
 <!-- ── BMS ────────────────────────────────────── -->
+<section class="section" id="sec-upload">
+  <div class="section-header">
+    <h2>BYOD Upload Diagnostic</h2>
+    <p>Upload a cycler CSV/TXT/XLSX file. The production pipeline fingerprints columns, extracts tier-1 features, plots dQ/dV, and keeps model claims confidence-scored.</p>
+  </div>
+
+  <div class="grid-2">
+    <div>
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title"><span class="indicator"></span> File Intake</div>
+        <div class="range-desc">Raw files are processed in memory by the production server and are not written to disk. Sessions auto-expire after 24 hours.</div>
+        <input class="mini-input" id="byod-file" type="file" accept=".csv,.txt,.tsv,.mpt,.dat,.xlsx,.xlsm" style="width:100%;margin:0.8rem 0">
+        <input class="mini-input" id="byod-file-b" type="file" accept=".csv,.txt,.tsv,.mpt,.dat,.xlsx,.xlsm" style="width:100%;margin:0 0 0.8rem 0" aria-label="Second file for comparison">
+        <input class="mini-input" id="byod-batch-file" type="file" accept=".zip" style="width:100%;margin:0 0 0.8rem 0" aria-label="ZIP batch upload">
+        <div style="display:flex;gap:0.75rem;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="analyzeBYOD()" type="button">Analyze Upload</button>
+          <button class="btn btn-ghost" onclick="compareBYOD()" type="button">Compare A/B</button>
+          <button class="btn btn-ghost" onclick="analyzeBYODBatch()" type="button">Batch ZIP</button>
+          <button class="btn btn-ghost" onclick="exportBYODCSV()" type="button">Export CSV</button>
+          <button class="btn btn-ghost" onclick="exportBYODJSON()" type="button">Export JSON</button>
+        </div>
+        <div class="plot-note" id="byod-status">Awaiting a cycler export. Best inputs include cycle, current, voltage, capacity, and temperature columns.</div>
+      </div>
+
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title"><span class="indicator"></span> Schema Mapper</div>
+        <table class="tbl">
+          <thead><tr><th>Canonical</th><th>Detected Column</th><th>Confidence</th></tr></thead>
+          <tbody id="byod-schema-body"><tr><td colspan="3">No upload yet.</td></tr></tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title"><span class="indicator"></span> Tier-1 Features</div>
+        <table class="tbl">
+          <thead><tr><th>Feature</th><th>Value</th><th>Mask</th></tr></thead>
+          <tbody id="byod-feature-body"><tr><td colspan="3">No features extracted yet.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title"><span class="indicator"></span> dQ/dV Fingerprint</div>
+        <div class="chart-box" id="byod-dqdv-chart" style="height:220px"></div>
+        <div class="plot-note" id="byod-dqdv-note">dQ/dV appears after upload when voltage-capacity discharge traces are present.</div>
+      </div>
+
+      <div class="grid-2" style="margin-bottom:1rem">
+        <div class="panel stat"><div class="val" id="byod-soh">--</div><div class="lbl">SOH</div></div>
+        <div class="panel stat"><div class="val" id="byod-confidence">--</div><div class="lbl">Confidence</div></div>
+        <div class="panel stat"><div class="val" id="byod-cycle80">--</div><div class="lbl">Cycle at 80%</div></div>
+        <div class="panel stat"><div class="val" id="byod-features">--</div><div class="lbl">Features Present</div></div>
+      </div>
+
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title"><span class="indicator"></span> M1-M14 Product Outputs</div>
+        <div id="byod-model-output">
+          <div class="switch-row"><div class="switch-label"><span class="name">Awaiting upload</span><span class="desc">The extended model layer appears here after feature extraction.</span></div><span class="tag warn">Idle</span></div>
+        </div>
+      </div>
+
+      <div class="panel" id="byod-formation" style="margin-bottom:1rem"></div>
+
+      <div class="decision-box" id="byod-decision">Upload data to get mechanism-aware triage and exportable arrays for OriginLab, MATLAB, or Python.</div>
+      <div id="byod-confidence-detail"></div>
+      <div class="console" id="byod-warnings" style="min-height:120px"><div class="info">No warnings.</div></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="sec-decisions">
+  <div class="section-header">
+    <h2>Decision Console</h2>
+    <p>One operating queue built from the actual panel outputs: action gates, evidence, owner, and next experiment.</p>
+  </div>
+
+  <div class="grid-4" style="margin-bottom:1rem">
+    <div class="panel stat"><div class="val" id="decision-open">--</div><div class="lbl">Open Actions</div></div>
+    <div class="panel stat"><div class="val" id="decision-critical">--</div><div class="lbl">Critical Gates</div></div>
+    <div class="panel stat"><div class="val" id="decision-confidence">--</div><div class="lbl">Avg Confidence</div></div>
+    <div class="panel stat"><div class="val" id="decision-last-run">None</div><div class="lbl">Latest Run</div></div>
+  </div>
+
+  <div class="panel" style="margin-bottom:1rem">
+    <div class="decision-toolbar">
+      <div>
+        <div class="panel-title"><span class="indicator"></span> Action Queue</div>
+        <div class="plot-note">Generated locally from current simulation, upload, and recipe state. It does not add hidden validation.</div>
+      </div>
+      <div class="decision-actions">
+        <button class="btn btn-ghost" onclick="renderDecisionConsole()" type="button">Refresh</button>
+        <button class="btn btn-ghost" onclick="exportExperimentTicketsCSV()" type="button">Export Tickets</button>
+        <button class="btn btn-ghost" onclick="exportDecisionMemoMarkdown()" type="button">Memo MD</button>
+        <button class="btn btn-ghost" onclick="exportDecisionMemoJSON()" type="button">Memo JSON</button>
+      </div>
+    </div>
+    <table class="tbl decision-table">
+      <thead><tr><th>Gate</th><th>Source</th><th>Evidence</th><th>Confidence</th><th>Action</th><th>Owner</th></tr></thead>
+      <tbody id="decision-action-body"><tr><td colspan="6">Run a panel to populate decisions.</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-title"><span class="indicator"></span> Experiment Tickets</div>
+      <div id="decision-ticket-list" class="experiment-list">
+        <div class="plot-note">Tickets appear after a panel run.</div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="decision-toolbar">
+        <div class="panel-title"><span class="indicator"></span> Local Run History</div>
+        <button class="btn btn-ghost" onclick="clearRunHistory()" type="button">Clear</button>
+      </div>
+      <table class="tbl">
+        <thead><tr><th>Time</th><th>Run</th><th>Summary</th><th>Metric</th></tr></thead>
+        <tbody id="decision-history-body"><tr><td colspan="4">No local run history yet.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
 <section class="section" id="sec-bms">
   <div class="section-header">
     <h2>BMS Pack Monitoring</h2>
@@ -309,12 +447,24 @@
           <label>load scale<input class="mini-input" id="bms-load" type="number" value="1.00" step="0.05"></label>
           <label>Rct gate<input class="mini-input" id="bms-rct-gate" type="number" value="0.043" step="0.001"></label>
           <label>alert risk<input class="mini-input" id="bms-risk-thresh" type="number" value="0.42" step="0.01"></label>
+          <label>seed<input class="mini-input" id="bms-seed" type="number" value="42" step="1"></label>
+        </div>
+        <div style="margin-top:0.5rem;display:flex;gap:0.5rem;align-items:center">
+          <button class="btn btn-ghost" type="button" onclick="document.getElementById('bms-seed').value=Math.floor(Math.random()*99999);runBMS()" style="font-size:0.7rem;padding:3px 8px">🎲 New Seed</button>
+          <span style="font-size:0.65rem;color:#666">Same seed = same result. Change seed to explore different fault scenarios.</span>
+        </div>
+        <div style="margin-top:0.5rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+          <label style="font-size:0.66rem;color:#999">seed sweep count <input class="mini-input" id="bms-sweep-count" type="number" min="3" max="80" value="16" step="1" style="width:72px;margin-left:0.35rem"></label>
+          <button class="btn btn-ghost" type="button" onclick="runBmsSweep()" style="font-size:0.7rem;padding:3px 8px">Sweep Seeds</button>
+          <span style="font-size:0.64rem;color:#666">Runs sequential seeds and reports alert-rate spread for the same pack setup.</span>
         </div>
       </div>
 
       <div style="margin-top:1rem">
         <button class="btn btn-primary" onclick="runBMS()">Run Pack Simulation</button>
         <button class="btn btn-ghost" onclick="exportBmsCSV()" type="button" style="margin-left:0.75rem">Download CSV</button>
+        <button class="btn btn-ghost" onclick="exportBmsJSON()" type="button" style="margin-left:0.5rem">Download JSON</button>
+        <button class="btn btn-ghost" onclick="generateReport()" type="button" style="margin-left:0.5rem">📄 Report</button>
       </div>
     </div>
 
@@ -333,6 +483,8 @@
         </div>
       </div>
       <div class="decision-box" id="bms-decision">Run the pack simulation to get a cell-level action recommendation.</div>
+      <div class="plot-note" id="bms-sweep-note">Run a seed sweep to quantify how sensitive this setup is to stochastic initialization.</div>
+      <div id="bms-confidence"></div>
     </div>
   </div>
 </section>
@@ -410,6 +562,8 @@
       <div style="margin-top:1rem">
         <button class="btn btn-primary" onclick="runScreening()">Screen Composition</button>
         <button class="btn btn-ghost" onclick="exportMaterialsCSV()" type="button" style="margin-left:0.75rem">Download CSV</button>
+        <button class="btn btn-ghost" onclick="exportMaterialsJSON()" type="button" style="margin-left:0.5rem">Download JSON</button>
+        <button class="btn btn-ghost" onclick="generateReport()" type="button" style="margin-left:0.5rem">📄 Report</button>
       </div>
     </div>
 
@@ -445,6 +599,7 @@
         </div>
       </div>
       <div class="decision-box" id="mat-decision">Screen a composition to see whether it is worth synthesizing or just worth simulating.</div>
+      <div id="mat-confidence"></div>
     </div>
   </div>
 </section>
@@ -500,8 +655,8 @@
 
       <div class="switch-row">
         <div class="switch-label">
-          <span class="name">Bayesian Prior Update</span>
-          <span class="desc">When enabled, observed recovery outcomes from previous batches update the Beta-distributed recovery priors via conjugate Bayesian updates: Beta(α + successes, β + trials - successes). This closes the learning loop.</span>
+          <span class="name">Bayesian Prior Blending</span>
+          <span class="desc">When enabled, blends literature-derived Beta-distributed priors — Beta(α, β) — with the shrinking-core kinetic estimate for each element. This regularizes recovery predictions when experimental data is limited.</span>
         </div>
         <label class="switch"><input type="checkbox" id="sw-bayes" checked onchange="updateRecycling()"><span class="slider"></span></label>
       </div>
@@ -520,6 +675,8 @@
       <div style="margin-top:1rem">
         <button class="btn btn-primary" onclick="runRecycling()">Optimize Recovery</button>
         <button class="btn btn-ghost" onclick="exportRecyclingCSV()" type="button" style="margin-left:0.75rem">Download CSV</button>
+        <button class="btn btn-ghost" onclick="exportRecyclingJSON()" type="button" style="margin-left:0.5rem">Download JSON</button>
+        <button class="btn btn-ghost" onclick="generateReport()" type="button" style="margin-left:0.5rem">📄 Report</button>
       </div>
     </div>
 
@@ -537,6 +694,7 @@
         </div>
       </div>
       <div class="decision-box" id="recycle-decision">Run the recipe to get recovery, uncertainty interval, and whether the batch is economical.</div>
+      <div id="recycle-confidence"></div>
     </div>
   </div>
 </section>
@@ -556,9 +714,19 @@
     <div class="panel-title"><span class="indicator"></span> Model Registry</div>
     <table class="tbl" id="model-table">
       <thead>
-        <tr><th>Model</th><th>Type</th><th>Status</th><th>Data</th><th>Params</th></tr>
+        <tr><th>Model</th><th>Type</th><th>Status</th><th>Checkpoint</th><th>Params</th></tr>
       </thead>
       <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="panel" style="margin-top:1rem">
+    <div class="panel-title"><span class="indicator"></span> Checkpoint Provenance</div>
+    <table class="tbl">
+      <thead><tr><th>Source Zip</th><th>Artifacts Imported</th><th>Manifest</th></tr></thead>
+      <tbody id="checkpoint-provenance-body">
+        <tr><td colspan="3">Run the API to load checkpoint provenance.</td></tr>
+      </tbody>
     </table>
   </div>
 </section>
@@ -683,6 +851,16 @@
       <div class="switch-row"><div class="switch-label"><span class="name">M10: Chemistry Ranker</span><span class="desc">Ranks cathode chemistries under the same operating assumptions.</span></div><span class="tag ok">Runnable</span></div>
     </div>
   </div>
+
+  <div class="panel" style="margin-top:1rem">
+    <div class="panel-title"><span class="indicator"></span> Extended BYOD Models</div>
+    <div class="grid-4">
+      <div class="switch-row"><div class="switch-label"><span class="name">M11: ElectrolyteHealth</span><span class="desc">EIS features to electrolyte degradation, sodium plating probability, and safe C-rate.</span></div><span class="tag ok">Runnable</span></div>
+      <div class="switch-row"><div class="switch-label"><span class="name">M12: Replenishability</span><span class="desc">Capacity recovery/reformation decision support. Gated as research preview until validated.</span></div><span class="tag warn">Preview</span></div>
+      <div class="switch-row"><div class="switch-label"><span class="name">M13: ChemIdentifier</span><span class="desc">Early-cycle features and dQ/dV clues for chemistry-family classification.</span></div><span class="tag ok">Runnable</span></div>
+      <div class="switch-row"><div class="switch-label"><span class="name">M14: FormationProtocol</span><span class="desc">Formation life, robustness, and SEI quality scores from early cycle data.</span></div><span class="tag warn">Preview</span></div>
+    </div>
+  </div>
 </section>
 
 <div class="assistant-dock" id="assistant-dock">
@@ -703,6 +881,7 @@
         <button type="button" data-q="How do I use this app?">Use app</button>
         <button type="button" data-q="What is the mechanism state map?">Mechanism map</button>
         <button type="button" data-q="What does the highlighted cell mean?">Cell highlight</button>
+        <button type="button" data-q="What should I do next from the Decision Console?">Next action</button>
         <button type="button" data-q="What should I validate before making strong claims?">Validation</button>
       </div>
     </div>
@@ -715,8 +894,9 @@
 </div>
 
 <footer class="footer">
-  KineticsForge — Simulation-backed, real-data benchmarked.
+  KineticsForge — Simulation-backed, real-data indexed, and validation-gated.
   All predictions carry uncertainty bounds and provenance metadata.
+  <br>Research-preview outputs are not certification, warranty, or safety approval. Raw BYOD uploads are processed in memory and sessions expire automatically.
 </footer>
 
 <script src="app.js"></script>

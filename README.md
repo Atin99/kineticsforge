@@ -7,7 +7,7 @@ It runs in the browser. No GPU needed for the webapp itself, all the physics run
 ## How to run it
 
 ```bash
-python serve_lite.py
+python serve.py
 ```
 
 Then go to `http://localhost:8000`. Thats it really. If you want the chatbot to use a cloud model, put your key in `.env`:
@@ -20,15 +20,35 @@ Without the key the assistant still works, it just uses built-in answers instead
 
 You can also just use `launch.bat` on windows if you dont want to type stuff.
 
-## What the four panels do
+## What the panels do
 
-**Diagnostics** - Set temperature, C-rate, cycles, and composition. It simulates capacity fade cycle by cycle, breaking it down into SEI growth, P2-O2 phase transition, Jahn-Teller distortion, rate stress from overpotential, and a neural residual that catches whatever the explicit physics missed. Theres a mechanism state map that shows you when and why the dominant loss shifts over time. Also has uncertainty bands so you know how much you should trust the numbers.
+**Diagnostics** - Set temperature, C-rate, cycles, and composition. It simulates capacity fade cycle by cycle, breaking it down into SEI growth, P2-O2 phase transition, Jahn-Teller distortion, rate stress from overpotential, and a bounded residual that catches whatever the explicit physics missed. There's a mechanism attribution donut chart that shows exactly what percentage each mechanism is responsible for. The confidence bar tells you how much of the fade is explained by real physics vs the residual term — if the residual dominates, the confidence drops and the UI tells you to calibrate against experimental data. Uncertainty bands show you the range of plausible outcomes. You can fit the model against your own experimental capacity data using the calibration tool.
 
-**BMS Pack Monitoring** - Models your pack as a graph where cells are nodes and thermal connections are edges. Each cell gets a risk score based on temperature, heat-rise slope, impedance drift, and what its neighbors are doing. The whole point is to catch the bad cell before it causes problems, not after the damage is done. You can inject faults and toggle EIS diagnostics to see how the risk model responds.
+**Upload (BYOD)** - Bring a cycler CSV/TXT/XLSX file from any major cycler: Arbin, Neware, Maccor, BioLogic, Basytec, or generic formats including Chinese-header Neware files. The pipeline fingerprints messy column names with 200+ header variants, maps them to the canonical battery schema, extracts tier-1 cycling features, and computes a dQ/dV fingerprint with annotated peaks (Fe³⁺/²⁺, Mn³⁺/⁴⁺, Na ordering, O²⁻ redox) plus a d²V/dQ² second derivative overlay for deeper mechanism fingerprinting. Runs M1-M14 product outputs and uses trained checkpoints when the PyTorch runtime is available. Missing features are carried as a mask instead of silently zero-filled. Formation efficiency scoring shows SEI quality, lifetime index, and robustness gauges when formation data is present.
+
+**BMS Pack Monitoring** - Models your pack as a graph where cells are nodes and thermal connections are edges. Each cell gets a risk score based on temperature, heat-rise slope, impedance drift, and what its neighbors are doing. The simulation is fully deterministic — same seed gives the same result every time. You can run a seed sweep across multiple seeds to check if your alert is robust or just a stochastic fluke; the BMS confidence reflects cross-seed stability. You can inject faults and toggle EIS diagnostics to see how the risk model responds.
 
 **Materials Screening** - Sweeps over Na/Mn/Fe composition space and scores each candidate on capacity, structural stability, fade at 500 cycles, cost per kWh, oxygen evolution risk, and charge balance. Generates a Pareto front so you can actually see the tradeoffs instead of optimizing one thing at a time. Its not going to replace DFT obviously but its fast enough to narrow down your candidates before you go to the lab.
 
-**Recycling** - Takes black mass feedstock and estimates metal recovery using shrinking-core leaching kinetics. Runs Monte Carlo over feedstock variation and assay noise to give you a recovery interval instead of a single number that you cant really trust. Then does a cost check to see if the batch is actually worth running. The Bayesian priors update as you feed in real recovery outcomes.
+**Recycling** - Takes black mass feedstock and estimates metal recovery using shrinking-core leaching kinetics. Runs Monte Carlo over feedstock variation and assay noise to give you a recovery interval instead of a single number that you cant really trust. Then does a cost check to see if the batch is actually worth running. Uses static Bayesian priors on element recovery rates (Beta distributions) that weight the kinetic model output. A feedback loop to update priors from real lab recoveries is on the roadmap but not implemented yet.
+
+**Decision Console** - Aggregates actionable items from every panel into a single queue. Each ticket has a severity gate (critical/high/medium/low), an owner assignment (researcher/engineer/operator), the evidence source, and a suggested next experiment. This is meant to be the "what do I do next" page that a researcher or QC engineer checks first thing in the morning. Exports to Markdown or JSON for lab notebooks and LIMS integration.
+
+## Export and reporting
+
+Every panel has three export options:
+
+- **Download CSV** — tabular data for OriginLab, Excel, or pandas
+- **Download JSON** — structured output with full parameters, results, and metadata for MATLAB/Python post-processing
+- **📄 Generate Report** — opens a print-ready report window with metrics, charts (captured from canvas), decision text, and provenance footer. Print to PDF from the browser.
+
+## Test suite
+
+```bash
+python -m pytest tests/ -v
+```
+
+23 tests covering BMS determinism, degradation physics invariants (monotonicity, temperature/C-rate sensitivity, mechanism sums), recycling reproducibility and bounds, materials screening dopant effects, BYOD schema detection for Arbin/Neware/BioLogic formats, and utility functions. No mocks — tests run against the real `serve_lite.py` functions.
 
 ## Folder structure
 
@@ -36,8 +56,8 @@ This is the actual layout of the project right now:
 
 ```
 kineticsforge/
-|-- serve_lite.py               lightweight server, numpy only, this is what render runs
-|-- serve.py                    full server with pytorch loaded
+|-- serve_lite.py               production CPU server implementation; legacy filename
+|-- serve.py                    recommended run entrypoint
 |-- Dockerfile
 |-- Procfile                    render deployment config
 |-- render.yaml
@@ -51,6 +71,9 @@ kineticsforge/
 |   |-- app.js                  all the simulation logic, canvas rendering, everything
 |   |-- index.html              layout and structure
 |   |-- index.css               styles
+|
+|-- tests/                      pytest test suite
+|   |-- test_platform.py        23 tests: determinism, physics, schema, bounds
 |
 |-- api/                        backend stuff
 |   |-- server.py               full API with auth and rate limiting
@@ -115,34 +138,11 @@ kineticsforge/
 |
 |-- inference/                  model loading and inference engine
 |   |-- engine.py
-|   |-- models.py
-|
-|-- training/                   training scripts, designed for kaggle T4 not local machines
-|   |-- train_cathode.py
-|   |-- train_bms.py
-|   |-- train_recycling.py
-|   |-- GPU_UPGRADE_QUEUE.md
-|   |-- colab_kaggle/           the whole kaggle/colab training infrastructure
-|       |-- industrial_training_pipeline.py
-|       |-- kaggle_colab_train.py
-|       |-- kaggle_colab_data_bootstrap.py
-|       |-- kaggle_input_builder.py
-|       |-- configs/
-|       |-- notebooks/
-|       |-- runs/
-|
-|-- kaggle_deploy/              kaggle notebook cells, real data zips, prep scripts
-|   |-- acct1_cathode_cell.py
-|   |-- acct2_bms_cell.py
-|   |-- acct3_recycling_cell.py
-|   |-- phase2_acct1_mega.py
-|   |-- phase2_acct2_mega.py
-|   |-- phase2_acct3_mega.py
-|   |-- prepare_real_data.py
-|   |-- prepare_real_data_v2.py
-|   |-- (data zip files and split folders)
+|   |-- models.py               M1-M10 architecture definitions
+|   |-- models_extended.py      M11-M14 architecture definitions
 |
 |-- data/                       data pipelines
+|   |-- byod_pipeline.py        BYOD upload processing, schema detection, feature extraction
 |   |-- assemble_real_dataset.py
 |   |-- normalize_real_data.py
 |   |-- normalize_nasa_pcoe_data.py
@@ -162,6 +162,24 @@ kineticsforge/
 |   |-- synthetic/              generated data for sparse conditions
 |   |-- cache/                  precomputed stuff
 |
+|-- training/                   training scripts, designed for kaggle T4 not local machines
+|   |-- train_cathode.py
+|   |-- train_bms.py
+|   |-- train_recycling.py
+|   |-- GPU_UPGRADE_QUEUE.md
+|   |-- colab_kaggle/           the whole kaggle/colab training infrastructure
+|       |-- industrial_training_pipeline.py
+|       |-- kaggle_colab_train.py
+|       |-- kaggle_colab_data_bootstrap.py
+|       |-- kaggle_input_builder.py
+|       |-- configs/
+|       |-- notebooks/
+|       |-- runs/
+|
+|-- kaggle_deploy/              kaggle notebook cells, real data zips, prep scripts
+|-- kaggle_deploy_2/            second-round training cells
+|-- kaggle_deploy_3/            fused mega-cell training (M1-M14 sequential)
+|
 |-- validation/                 holdout benchmarks and readiness checks
 |   |-- holdout_benchmarks.py
 |   |-- real_holdout_benchmarks.py
@@ -179,7 +197,7 @@ kineticsforge/
 
 ## API endpoints
 
-Run `python serve_lite.py` and you get these:
+Run `python serve.py` and you get these:
 
 | Method | Endpoint | What it does |
 |--------|----------|--------------|
@@ -187,14 +205,25 @@ Run `python serve_lite.py` and you get these:
 | POST | /api/simulate/bms | thermal graph pack simulation |
 | POST | /api/optimize/recycling | leaching kinetics + bayesian recovery |
 | POST | /api/screen/cathode | composition scoring and pareto candidates |
-| POST | /api/chat | chatbot with dynamic model routing |
+| POST | /api/byod/analyze | upload cycler data, map columns, extract tier-1 features, dQ/dV, M1-M14 rules, and checkpoint outputs when available |
+| POST | /api/byod/analyze-full | same upload path, but fails if trained PyTorch checkpoint inference is unavailable |
+| POST | /api/byod/compare | compare two uploaded cycler files for A/B cell, protocol, or formation studies |
+| POST | /api/byod/batch | upload a ZIP of cycler files and get batch statistics plus outlier flags |
+| POST | /api/byod/webhook/cycle | cycler station hook for cycle-level continue/investigate/stop triage |
+| GET | /api/byod/session/{session_id} | canonical JSON view of an in-memory BYOD analysis session |
+| GET | /api/byod/session/{session_id}/export-json | export canonical BYOD JSON for downstream notebooks, QC systems, or archives |
+| GET | /api/byod/session/{session_id}/export | export parsed cycle summaries, extracted features, and M1-M14 readouts from the in-memory session |
+| GET | /api/models | M1-M14 model registry with checkpoint presence and zip provenance |
+| POST | /api/chat | chatbot with OpenRouter free-model routing, deterministic fallback, and browser-supplied recent-turn context |
 | GET | /health | is the server alive |
 
 ## Deployment
 
-I deploy on Render free tier. `serve_lite.py` only needs numpy, no pytorch, so it fits in the memory limits without any issues. Training happens on Kaggle T4 GPUs, I split the work across three accounts because of the 12 hour runtime limit per session. The kaggle cells and data prep scripts are all in `kaggle_deploy/`.
+I deploy on Render free tier with the production CPU server. It runs the physics and BYOD product path without requiring PyTorch, then uses trained checkpoints automatically when the runtime has torch installed. Training happens on Kaggle T4 GPUs, I split the work across three accounts because of the 12 hour runtime limit per session. The kaggle cells and data prep scripts are all in `kaggle_deploy/`, `kaggle_deploy_2/`, and `kaggle_deploy_3/`.
 
-The checkpoints folder has all the trained weights from the kaggle runs - things like the physics-informed neural ODE, SOH estimator, RUL predictor, knee detection model, recycling model, and a couple of joint models. They're all `.pt` files sitting in `checkpoints/trained/`.
+The checkpoints folder has trained weights from the Kaggle runs - M1-M10 in `checkpoints/trained/` and M11-M14 imported from the latest result zips. Run `python scripts/extract_checkpoints.py` after downloading new Kaggle outputs; it writes `checkpoints/trained/checkpoint_manifest.json` so `/api/models` and the UI can show which result zip each checkpoint came from.
+
+Weights are ignored by git on purpose. For local Docker builds the Dockerfile copies `checkpoints/` if the files are present. For Render's git-based Python runtime, create a private artifact with `python scripts/bundle_checkpoints.py`, upload `artifacts/kineticsforge-checkpoints.zip` to private object storage, and set `KF_CHECKPOINT_BUNDLE_URL`. On startup the server restores only checkpoint files and manifest JSON from that bundle.
 
 ## Data - how I collected it
 
@@ -224,7 +253,9 @@ I also generate synthetic cycling data for training when real data is sparse for
 
 ## Whats done and whats not
 
-Being honest here. The browser simulations work, all four panels run and give numbers that are in the right ballpark for Na-ion cathode behavior. The physics modules are implemented and they compile. The API serves predictions. I have trained models sitting in checkpoints from the kaggle runs.
+Being honest here. The browser simulations work, all panels run, and the upload path now accepts real cycler exports for first-pass diagnostics. The physics modules are implemented and they compile. The API serves predictions. I have trained models sitting in checkpoints from the kaggle runs, and `/api/models` exposes whether those files are actually present at runtime.
+
+The platform has a full export layer (CSV, JSON, PDF reports), a mechanism attribution system that shows _why_ degradation is happening not just _how much_, dQ/dV fingerprinting with electrochemical peak labeling, formation efficiency scoring, and a decision console that collects actionable items across all panels. Every prediction carries a confidence bar that reflects real signal quality — physics/residual ratio for degradation, cross-seed stability for BMS, feature coverage for uploads — not a fixed number.
 
 But the physics coefficients still need proper calibration against published experimental data - right now some of them are literature estimates that havent been fine-tuned. The degradation predictions are reasonable but could be tighter with better coefficient fitting. I have a calibration engine (`data/calibration_engine.py`) and a calibration-against-published module (`core/calibration_against_published.py`) set up for this, its just ongoing work.
 

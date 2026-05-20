@@ -3,13 +3,21 @@ services:
   - type: web
     name: kineticsforge
     runtime: python
-    buildCommand: pip install fastapi uvicorn[standard] numpy pydantic
-    startCommand: python serve_lite.py
+    buildCommand: pip install -r requirements-deploy.txt
+    startCommand: python serve.py
     envVars:
       - key: PORT
         value: 10000
+      - key: KF_ENV
+        value: production
+      - key: KF_CORS_ORIGINS
+        value: https://kineticsforge.onrender.com
+      - key: KF_ALLOWED_HOSTS
+        value: kineticsforge.onrender.com
       - key: PYTHON_VERSION
         value: "3.11"
+      - key: KF_CHECKPOINT_BUNDLE_URL
+        sync: false
       - key: OPENROUTER_MODEL
         value: openrouter/free
       - key: OPENROUTER_API_KEY

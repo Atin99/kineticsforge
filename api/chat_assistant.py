@@ -1,7 +1,7 @@
 """Small server-side assistant for the KineticsForge web UI.
 
-The assistant is intentionally stateless. Each request retrieves a few local
-project facts, optionally calls OpenRouter, and forgets the exchange.
+The server does not persist private chat history. The browser may send recent
+local turns with each request so follow-up questions can still make sense.
 """
 import json
 import math
@@ -20,8 +20,8 @@ PROJECT_KNOWLEDGE = [
             "KineticsForge is a battery physics workbench. It helps choose which "
             "degradation mechanism is dominating, which pack cell needs attention, "
             "which Na-ion cathode recipe is worth making, and which recycling recipe "
-            "is worth running next. The browser uses lightweight physics mirrors; "
-            "the repository also contains deeper Python modules and validation gates."
+            "is worth running next. The production CPU server runs physics endpoints "
+            "and can use trained checkpoints when the PyTorch runtime is available."
         ),
     },
     {
@@ -70,12 +70,35 @@ PROJECT_KNOWLEDGE = [
     },
     {
         "title": "API Surface",
-        "keywords": "api endpoints health models predict simulate optimize screen chat fastapi",
+        "keywords": "api endpoints health models predict simulate optimize screen chat upload byod fastapi",
         "text": (
-            "The lightweight FastAPI app exposes /health, /api/models, "
+            "The production FastAPI app exposes /health, /api/models, "
             "/api/predict/degradation, /api/simulate/bms, /api/optimize/recycling, "
-            "/api/screen/cathode, and /api/chat. Compatibility endpoints also exist "
-            "for lifetime prediction, BMS alerts, recycling, and cathode screening."
+            "/api/screen/cathode, /api/byod/analyze, /api/byod/analyze-full, and "
+            "/api/byod/compare, /api/byod/batch, /api/byod/webhook/cycle, session exports, "
+            "and /api/chat. Compatibility endpoints also exist for lifetime prediction, BMS "
+            "alerts, recycling, and cathode screening."
+        ),
+    },
+    {
+        "title": "Upload Diagnostics",
+        "keywords": "upload byod csv xlsx dataset schema features soh confidence cycle80 chemistry plating warnings",
+        "text": (
+            "The upload panel fingerprints cycler columns, extracts tier-1 features, "
+            "computes dQ/dV peaks when voltage-capacity traces are available, reports "
+            "SOH and cycle-to-80 estimates, and marks warnings when data is missing, "
+            "specific-capacity based, truncated, or low confidence. If PyTorch is "
+            "available, trained checkpoint outputs are attached next to the rule outputs."
+        ),
+    },
+    {
+        "title": "Decision Console",
+        "keywords": "decision console action queue experiment tickets memo priority next owner gate critical watch ready",
+        "text": (
+            "The Decision Console is a browser-side operating layer. It does not run hidden models. "
+            "It derives an action queue, owner, evidence, and next experiment from the current panel "
+            "outputs and local run history. It can export experiment tickets as CSV and decision memos "
+            "as Markdown or JSON."
         ),
     },
     {
@@ -92,8 +115,8 @@ PROJECT_KNOWLEDGE = [
         "title": "Deployment",
         "keywords": "deployment render free tier openrouter api key environment variable model server cloud",
         "text": (
-            "The deploy path is lightweight: FastAPI plus static HTML/CSS/JS and numpy "
-            "physics mirrors. The chat assistant does not load an LLM locally. It calls "
+            "The deploy path is a production CPU FastAPI app plus static HTML/CSS/JS and numpy "
+            "physics endpoints. The chat assistant does not load an LLM locally. It calls "
             "OpenRouter only when OPENROUTER_API_KEY is configured. OPENROUTER_MODEL can "
             "override the default model."
         ),
@@ -102,9 +125,10 @@ PROJECT_KNOWLEDGE = [
         "title": "Limitations",
         "keywords": "limitations not medical safety production guarantee memory stateless context hallucination",
         "text": (
-            "The assistant is stateless and should not remember users. It should answer "
-            "specific UI questions directly, avoid brochure language, and must not invent "
-            "validation results or claim production battery safety certification."
+            "The assistant does not persist users server-side. It can use recent browser-supplied "
+            "conversation turns for follow-up context. It should answer specific UI questions "
+            "directly, avoid brochure language, and must not invent validation results or claim "
+            "production battery safety certification."
         ),
     },
 ]
@@ -141,7 +165,7 @@ def _state_summary(state: Optional[Dict[str, Any]]) -> str:
     if not isinstance(state, dict):
         return ""
     parts = []
-    for section in ("diagnostics", "bms", "materials", "recycling"):
+    for section in ("diagnostics", "bms", "materials", "recycling", "upload", "decisions"):
         value = state.get(section)
         if not isinstance(value, dict):
             continue
@@ -160,6 +184,18 @@ def _state_summary(state: Optional[Dict[str, Any]]) -> str:
                     fields.append(f"{key}={text[:220]}")
         if fields:
             parts.append(section + ": " + ", ".join(fields[:10]))
+    conversation = state.get("conversation")
+    if isinstance(conversation, list):
+        turns = []
+        for item in conversation[-8:]:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "user").strip()[:12]
+            text = str(item.get("text") or "").strip()
+            if text:
+                turns.append(f"{role}: {text[:280]}")
+        if turns:
+            parts.append("recent conversation:\n" + "\n".join(turns))
     return "\n".join(parts)[:2400]
 
 
@@ -199,9 +235,36 @@ def _direct_ui_answer(question: str, state: Optional[Dict[str, Any]]) -> Optiona
     diag = state.get("diagnostics", {}) if isinstance(state, dict) else {}
     mat = state.get("materials", {}) if isinstance(state, dict) else {}
     rec = state.get("recycling", {}) if isinstance(state, dict) else {}
+    upload = state.get("upload", {}) if isinstance(state, dict) else {}
+    decisions = state.get("decisions", {}) if isinstance(state, dict) else {}
+
+    if upload and any(term in q for term in ["upload", "dataset", "file", "my cell", "cell healthy", "healthy", "soh", "schema", "features", "plating", "chemistry", "warnings"]):
+        filename = upload.get("filename") or "the uploaded file"
+        rows = upload.get("rows_read", "--")
+        features = upload.get("features_present", 0)
+        schema_score = _as_float(upload.get("schema_score"), float("nan"))
+        soh = upload.get("soh")
+        confidence = upload.get("confidence")
+        cycle_80 = upload.get("cycle_80")
+        warnings = upload.get("warnings") if isinstance(upload.get("warnings"), list) else []
+        models = upload.get("model_outputs") if isinstance(upload.get("model_outputs"), dict) else {}
+        m11 = models.get("M11_ElectrolyteHealth", {}) if isinstance(models.get("M11_ElectrolyteHealth"), dict) else {}
+        m13 = models.get("M13_ChemIdentifier", {}) if isinstance(models.get("M13_ChemIdentifier"), dict) else {}
+        plating = m11.get("checkpoint_sodium_plating_probability", m11.get("sodium_plating_probability"))
+        chem = m13.get("checkpoint_class_id", m13.get("predicted_family", "unknown"))
+        soh_text = _fmt_state_value(_as_float(soh, float("nan")) * 100, "%", 1)
+        conf_text = _fmt_state_value(_as_float(confidence, float("nan")) * 100, "%", 0)
+        verdict = "healthy enough for triage" if _as_float(soh, 0.0) >= 0.90 and _as_float(confidence, 0.0) >= 0.60 and not warnings else "needs cautious interpretation"
+        warn_text = " No parser warnings." if not warnings else " Main warning: " + str(warnings[0])
+        plating_text = "" if plating is None else f" Sodium plating risk is {_fmt_state_value(plating, digits=3)}."
+        return (
+            f"{filename} parsed {rows} rows with {features} features and schema score {_fmt_state_value(schema_score, digits=2)}. "
+            f"SOH is {soh_text}, confidence is {conf_text}, cycle-to-80 is {cycle_80 if cycle_80 is not None else '--'}; this {verdict}. "
+            f"Chemistry signal: {chem}.{plating_text}{warn_text}"
+        )
 
     cell_match = re.search(r"\bc\s*([0-9]{1,2})\b", q)
-    if cell_match and any(term in q for term in ["highlight", "red", "glow", "signify", "mean", "risk", "cell"]):
+    if cell_match and any(term in q for term in ["highlight", "red", "glow", "signify", "mean", "risk", "cell", "do", "should", "about", "with", "what", "why", "how", "action", "inspect", "cool", "isolate"]):
         cell_id = "C" + cell_match.group(1)
         detail = cells.get(cell_id)
         if detail:
@@ -248,6 +311,36 @@ def _direct_ui_answer(question: str, state: Optional[Dict[str, Any]]) -> Optiona
                 answer += f" The action threshold is {float(threshold):.2f}."
             return answer
         return "The cell risk map is the BMS triage view: one tile per cell, with color/glow increasing when thermal risk, EIS drift, or neighbor heating rises."
+
+    # BMS non-determinism / different output each time
+    if any(term in q for term in ["diff output", "different output", "different result", "every time", "not reproducible", "random", "inconsistent", "changes every", "non-deterministic"]):
+        if any(term in q for term in ["bms", "cell", "risk", "pack", "map"]):
+            seed = bms.get("seed", "not set")
+            inject = bms.get("inject_fault", True)
+            return (
+                f"The BMS simulation uses a seeded pseudo-random number generator (seed={seed}) for initial cell temperatures, resistance offsets, and fault cell selection. "
+                f"With the same seed and 'Inject Cell Failure' = {inject}, you will get identical results every run. "
+                "To explore different scenarios, change the seed value in the advanced knobs or click '\U0001f3b2 New Seed'. "
+                "The seed is shown in the simulation log output."
+            )
+
+    if decisions and any(term in q for term in ["decision console", "action queue", "priority", "prioritize", "what next", "do next", "next experiment", "experiment ticket", "pilot memo", "memo"]):
+        items = decisions.get("items") if isinstance(decisions.get("items"), list) else []
+        if items:
+            top = items[0]
+            severity = str(top.get("severity", "info")).upper()
+            source = top.get("source", "Workbench")
+            evidence = top.get("evidence", "--")
+            action = top.get("action", "--")
+            next_step = top.get("next", "--")
+            open_actions = decisions.get("open_actions", 0)
+            critical = decisions.get("critical_actions", 0)
+            return (
+                f"Top priority is **{source}** [{severity}]. Evidence: {evidence}. "
+                f"Action: {action} Next experiment: {next_step} "
+                f"The queue currently has {open_actions} open actions and {critical} critical gates."
+            )
+        return "The Decision Console is empty because no panel output has been run yet. Run a simulation or upload data, then refresh the console."
 
     if "4d" in q or "mechanism surface" in q or "mechanism state" in q or "mechanism map" in q or "state map" in q:
         decision = str(diag.get("decision", "")).strip()
@@ -336,8 +429,8 @@ def _direct_ui_answer(question: str, state: Optional[Dict[str, Any]]) -> Optiona
     # Bot identity
     if any(term in q for term in ["who are you", "what are you", "are you openrouter", "are you fallback", "are you a bot", "are you ai", "which model"]):
         return (
-            "I'm KineticsForge Assist, a stateless in-app helper. I use deterministic rules for UI questions and optionally call a cloud model for open-ended ones. "
-            "I have no memory between messages and I am not a general-purpose chatbot."
+            "I'm KineticsForge Assist. I use deterministic project rules for exact UI questions and OpenRouter free-model routing for open-ended ones when configured. "
+            "The server does not store chat history, but this browser can send recent local turns so follow-up questions work."
         )
 
     # Ideal / fake / too perfect data concerns
@@ -474,6 +567,10 @@ def _direct_ui_answer(question: str, state: Optional[Dict[str, Any]]) -> Optiona
             return "You are looking at the materials screening panel. It scores Na-ion cathode compositions by capacity, stability, fade, cost, and defect risk. Adjust Na/Mn/Fe sliders and run screening to compare candidates."
         if panel == "recycling":
             return "You are looking at the recycling optimizer. It estimates metal recovery from black mass using shrinking-core leaching kinetics, Bayesian priors, and Monte Carlo uncertainty."
+        if panel == "upload":
+            return "You are looking at the BYOD upload panel. It fingerprints cycler columns, extracts tier-1 battery features, plots dQ/dV when traces are available, and marks prediction confidence instead of hiding missing data."
+        if panel == "decisions":
+            return "You are looking at the Decision Console. It turns current panel outputs into an action queue with evidence, owner, and next experiment, then exports tickets or a memo without adding hidden validation claims."
         if panel == "diagnostics":
             return "You are looking at the diagnostics panel. It simulates capacity fade for Na-ion cathodes under specified temperature, C-rate, and cycle conditions, and identifies the dominant degradation mechanism."
         return "KineticsForge is a battery decision workbench. It helps choose: which degradation mechanism is dominating, which pack cell needs attention, which cathode is worth making, and which recycling recipe is worth running."
@@ -489,6 +586,10 @@ def _direct_ui_answer(question: str, state: Optional[Dict[str, Any]]) -> Optiona
             return "The materials charts show: (1) a Pareto scatter of capacity vs stability (red dots = front, your pick = large dot), and (2) a composition landscape where height/color = objective score."
         if panel == "recycling":
             return "The recycling chart shows shrinking-core conversion over leach time for Mn (red), Fe (orange), and Na (blue). Higher curves mean faster recovery."
+        if panel == "upload":
+            return "The upload panel chart is the dQ/dV fingerprint. Peaks are diagnostic voltage signatures; if the chart is empty, the upload did not include enough discharge voltage-capacity trace points."
+        if panel == "decisions":
+            return "The Decision Console tables are not model charts. They summarize current evidence, action gates, owners, and experiment tickets derived from the panel outputs."
         return "Each panel has specific charts. Navigate to a panel and ask again for details."
 
     # Calibration
@@ -501,8 +602,8 @@ def _direct_ui_answer(question: str, state: Optional[Dict[str, Any]]) -> Optiona
     # Download / export
     if "download" in q or "export" in q or "csv" in q:
         return (
-            "Each panel has an Export CSV button. Diagnostics exports cycle-by-cycle capacity and mechanism breakdown. "
-            "BMS exports cell risk, temperature, and impedance per timestep. Materials exports the selected composition properties. Recycling exports element-level recovery."
+            "Each panel has CSV/JSON export for its own result. Diagnostics exports cycle-by-cycle capacity and mechanism breakdown; Upload exports parsed summaries and features; BMS exports cell risk, temperature, and impedance per timestep; Materials exports selected composition properties; Recycling exports element-level recovery. "
+            "The Decision Console can also export experiment tickets as CSV and decision memos as Markdown or JSON."
         )
 
     return None
@@ -573,16 +674,19 @@ def _local_answer(question: str, sections: List[Dict[str, str]], state: Optional
     bms = state.get("bms", {}) if isinstance(state, dict) else {}
     mat = state.get("materials", {}) if isinstance(state, dict) else {}
     rec = state.get("recycling", {}) if isinstance(state, dict) else {}
+    upload = state.get("upload", {}) if isinstance(state, dict) else {}
 
     if intent == "how_to":
-        return "Use Diagnostics for fade, BMS for cell risk, Materials for cathode screening, and Recycling for leach economics. Run the panel, then read the decision box and the highest-risk metric."
+        return "Use Upload for real cycler files, Diagnostics for editable physics simulations, BMS for cell risk, Materials for cathode screening, and Recycling for leach economics. Run the panel, then read the decision box and confidence/warning labels."
     if intent == "action":
-        if panel == "materials" or mat:
-            return f"Current composition is Na={_fmt_state_value(mat.get('na'))}, Mn={_fmt_state_value(mat.get('mn'))}, Fe={_fmt_state_value(mat.get('fe'))}. Score is {_fmt_state_value(mat.get('score'), digits=3)}; synthesize only if stability is high and fade/oxygen/charge risks are controlled."
-        if panel == "bms" or bms:
+        if panel == "bms" or (not mat and bms):
             return f"Use the highest-risk cell first. Current max risk is {_fmt_state_value(bms.get('max_risk'), digits=3)} against gate {_fmt_state_value(bms.get('threshold'), digits=2)}; cool or inspect if it crosses the gate."
+        if panel == "materials" or (mat and panel not in ('bms', 'recycling', 'upload', 'diagnostics')):
+            return f"Current composition is Na={_fmt_state_value(mat.get('na'))}, Mn={_fmt_state_value(mat.get('mn'))}, Fe={_fmt_state_value(mat.get('fe'))}. Score is {_fmt_state_value(mat.get('score'), digits=3)}; synthesize only if stability is high and fade/oxygen/charge risks are controlled."
         if panel == "recycling" or rec:
             return f"Current recovery is {_fmt_state_value(rec.get('recovered_kg'), ' kg', 1)}, purity proxy {_fmt_state_value(_as_float(rec.get('purity_proxy')) * 100, '%', 1)}, margin INR {_fmt_state_value(rec.get('margin_proxy_inr'), digits=0)}. Pilot only if recovery, purity, and margin are all positive."
+        if panel == "upload" or upload:
+            return f"The upload parser read {upload.get('rows_read', '--')} rows with schema score {_fmt_state_value(upload.get('schema_score'), digits=2)} and {upload.get('features_present', 0)} features present. Treat outputs with warnings as triage, then export the CSV for your lab notebook."
         return f"Current fade is {_fmt_state_value(diag.get('fade'))} at {_fmt_state_value(diag.get('temperature_C'), ' C', 0)} and {_fmt_state_value(diag.get('c_rate'), 'C', 1)}. Follow the dominant mechanism in the decision box before changing chemistry or cycling conditions."
     if intent == "current":
         if panel == "bms" and bms:
@@ -591,6 +695,8 @@ def _local_answer(question: str, sections: List[Dict[str, str]], state: Optional
             return f"The selected cathode is Na={_fmt_state_value(mat.get('na'))}, Mn={_fmt_state_value(mat.get('mn'))}, Fe={_fmt_state_value(mat.get('fe'))}. Capacity is {mat.get('capacity', '--')}, stability {mat.get('stability', '--')}, score {_fmt_state_value(mat.get('score'), digits=3)}."
         if panel == "recycling" and rec:
             return f"The recipe uses {rec.get('mass_kg', '--')} kg black mass, {rec.get('acid_molarity', '--')} M acid, and {rec.get('temperature_C', '--')} C. Recovery is {_fmt_state_value(rec.get('recovered_kg'), ' kg', 1)} with interval {rec.get('interval_kg') or '--'}."
+        if panel == "upload" and upload:
+            return f"The upload result is {upload.get('filename', 'the current file')}: {upload.get('rows_read', '--')} rows, {upload.get('features_present', 0)} features, SOH {_fmt_state_value(_as_float(upload.get('soh')) * 100, '%', 1)}, confidence {_fmt_state_value(_as_float(upload.get('confidence')) * 100, '%', 0)}."
         return f"Diagnostics is set to {_fmt_state_value(diag.get('temperature_C'), ' C', 0)}, {_fmt_state_value(diag.get('c_rate'), 'C', 1)}, {diag.get('cycles', '--')} cycles. Current EOL capacity is {diag.get('eol_capacity', '--')} and fade is {diag.get('fade', '--')}."
     if intent == "concept":
         q = question.lower()
@@ -643,16 +749,20 @@ def _messages(question: str, sections: List[Dict[str, str]], section: str = "gen
     state_context = _state_summary(state) or "No current UI state was supplied."
     deterministic = _direct_ui_answer(question, state)
     system = (
-        "You are KineticsForge Assist, a stateless in-app helper. You do not keep memory. "
-        "Answer the user's current question only. Use the provided project context first "
-        "for KineticsForge questions. If the question is outside the project, answer normally "
-        "but keep it concise. Do not invent validation, safety, funding, or production claims. "
-        "When a claim is uncertain, say what would need validation. Answer in 2-4 sentences; "
-        "if the user wants more detail, they will ask. Reference the actual values from the UI "
-        "state when answering about current results. If a deterministic UI readout is supplied, "
-        "preserve its numbers and action meaning. Never start with 'KineticsForge is' because "
-        "the user already knows the app. If you don't know, say so in one sentence. Don't fabricate. "
-        "Use plain phone-support language, not brochure language."
+        "You are KineticsForge Assist — an expert electrochemical engineer and adaptive AI collaborator "
+        "embedded in a battery physics workbench. You validate engineering concerns directly, call out "
+        "flawed physical assumptions gently but firmly, and use structured formatting (bold for emphasis, "
+        "bullet points for lists) to keep answers scannable. "
+        "The server does not persist memory, but the prompt may include recent browser-supplied "
+        "conversation turns; use them only for local follow-up context. Use the provided project context "
+        "first for KineticsForge questions and the UI state second for current results. If the question "
+        "is outside the project, answer normally but keep it concise. Do not invent validation, safety, "
+        "funding, or production claims. When a claim is uncertain, say what would need validation. If a "
+        "result is simulated, heuristic, or checkpoint-based, say so. Answer in 2-5 sentences; if the user "
+        "wants more detail, they will ask. If a deterministic UI readout is supplied, preserve its numbers "
+        "and action meaning. Never start with 'KineticsForge is' because the user already knows the app. "
+        "If you don't know, say so in one sentence. Don't fabricate. Use plain, direct technical language, "
+        "not brochure language. When showing numbers, reference the actual current simulation state."
     )
     if deterministic:
         state_context += "\n\nDeterministic UI readout to preserve: " + deterministic
@@ -661,6 +771,12 @@ def _messages(question: str, sections: List[Dict[str, str]], section: str = "gen
         {"role": "user", "content": "Active section: " + section[:80] + "\n\nProject context:\n" + project_context + "\n\nCurrent UI state:\n" + state_context},
         {"role": "user", "content": question[:1200]},
     ]
+
+
+def _memory_mode(state: Optional[Dict[str, Any]]) -> str:
+    if isinstance(state, dict) and isinstance(state.get("conversation"), list) and state.get("conversation"):
+        return "browser_recent_turns"
+    return "off"
 
 
 def answer_chat(question: str, section: str = "general", state: Optional[Dict[str, Any]] = None) -> Dict[str, object]:
@@ -677,7 +793,7 @@ def answer_chat(question: str, section: str = "general", state: Optional[Dict[st
             "answer": direct or _local_answer(clean_question, sections, state),
             "source": "local_setup_fallback",
             "model": "none",
-            "memory": "off",
+            "memory": _memory_mode(state),
             "context": context_titles,
             "setup_required": True,
         }
@@ -716,7 +832,7 @@ def answer_chat(question: str, section: str = "general", state: Optional[Dict[st
                 "answer": content,
                 "source": "openrouter",
                 "model": data.get("model", model),
-                "memory": "off",
+                "memory": _memory_mode(state),
                 "context": context_titles,
                 "setup_required": False,
             }
@@ -727,7 +843,7 @@ def answer_chat(question: str, section: str = "general", state: Optional[Dict[st
         "answer": direct or _local_answer(clean_question, sections, state),
         "source": "local_setup_fallback",
         "model": "openrouter_retry_failed",
-        "memory": "off",
+        "memory": _memory_mode(state),
         "context": context_titles,
         "setup_required": False,
         "warning": f"OpenRouter models failed; answered from compact fallback ({last_exc.__class__.__name__ if last_exc else 'unknown'}).",

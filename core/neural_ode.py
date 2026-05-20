@@ -44,15 +44,33 @@ class HyperNetVectorField(nn.Module):
         return torch.bmm(w2, h.unsqueeze(-1)).squeeze(-1) + b2
 
 class TensorContractionField(nn.Module):
+    """Tensor contraction vector field for neural ODE.
+    
+    For order > 1, naive sequential contraction changes tensor rank at each step,
+    causing shape mismatches. Instead, we contract each tensor independently with
+    the input and sum contributions, keeping output shape = input shape.
+    
+    For order=1: single contraction x @ T[0] (linear map, always safe).
+    For order>1: sum of x @ T[i] for i in range(order), which is equivalent
+    to x @ (T[0] + T[1] + ...) but keeps gradients flowing through each tensor.
+    """
     def __init__(self, order, dims):
         super().__init__()
         self.order = order
         self.dims = dims
-        self.tensors = nn.ParameterList([nn.Parameter(torch.randn(dims)) for _ in range(order)])
+        if len(dims) != 2 or dims[0] != dims[1]:
+            raise ValueError(
+                f"TensorContractionField requires square dims (d, d) for safe contraction, got {dims}. "
+                f"Input last dim must equal output dim."
+            )
+        self.tensors = nn.ParameterList([nn.Parameter(torch.randn(dims) * 0.01) for _ in range(order)])
+
     def forward(self, t, x):
-        res = x
-        for i in range(self.order):
-            res = torch.tensordot(res, self.tensors[i], dims=([-1], [0]))
+        # Sum of independent contractions: each tensor acts as a linear map on x
+        # This avoids the rank-explosion problem of sequential contraction
+        res = torch.tensordot(x, self.tensors[0], dims=([-1], [0]))
+        for i in range(1, self.order):
+            res = res + torch.tensordot(x, self.tensors[i], dims=([-1], [0]))
         return res
 
 class PIController:

@@ -21,7 +21,7 @@ echo [1/3] Checking dependencies...
 pip show fastapi >nul 2>&1
 if errorlevel 1 (
     echo       Installing dependencies...
-    pip install fastapi uvicorn[standard] numpy pydantic --quiet
+    pip install fastapi uvicorn[standard] numpy pydantic python-multipart openpyxl --quiet
 )
 
 :: Extract checkpoints from Kaggle results
@@ -38,5 +38,5 @@ echo   Press Ctrl+C to stop
 echo  ============================================
 echo.
 
-python serve_lite.py
+python serve.py
 pause

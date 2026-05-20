@@ -1,0 +1,70 @@
+{
+  "version": "v2_full_pipeline",
+  "train_cells": 444,
+  "val_cells": 63,
+  "test_cells": 47,
+  "max_seq": 600,
+  "cond_dim": 5,
+  "n_features": 27,
+  "feature_names": [
+    "v_mean",
+    "v_std",
+    "v_min",
+    "v_max",
+    "v_range",
+    "v_iqr",
+    "v_skew",
+    "v_slope",
+    "i_mean",
+    "i_std",
+    "i_abs_mean",
+    "i_max",
+    "i_min",
+    "temp_mean",
+    "temp_max",
+    "temp_range",
+    "ndc_mean",
+    "ndc_end",
+    "coulombic_efficiency",
+    "voltage_min_V",
+    "voltage_max_V",
+    "internal_resistance_mean_ohm",
+    "re_mean",
+    "re_std",
+    "re_trend",
+    "rct_mean",
+    "rct_std"
+  ],
+  "cond_names": [
+    "temp_C",
+    "charge_rate",
+    "discharge_rate",
+    "cathode_id",
+    "nominal_Ah"
+  ],
+  "cathode_map": {
+    "NMC": 0,
+    "LiCoO2": 1,
+    "LiCoO2+LiNi0.4Co0.4Mn0.2O2": 2,
+    "NMC111": 3,
+    "Unknown": 4,
+    "LFP": 5,
+    "NCA": 6,
+    "LiNi0.8Co0.15Al0.05O2": 7,
+    "LiNi0.5Co0.2Mn0.3O2": 8
+  },
+  "test_datasets": [
+    "CALCE",
+    "NASA_PCoE"
+  ],
+  "total_cycle_rows": 218075,
+  "total_timeseries_rows_processed": 5512521,
+  "total_ts_cycle_features": 218152,
+  "impedance_rows": 1956,
+  "data_sources": {
+    "cycle_summaries": "185K rows from 11 datasets",
+    "timeseries": "5,512,521 rows \u2192 218,152 per-cycle features",
+    "impedance": "1,956 EIS measurements",
+    "isu_ilcc": "523K Q-interpolated voltage curves"
+  }
+}

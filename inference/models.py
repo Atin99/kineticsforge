@@ -181,6 +181,17 @@ class ChemRanker(nn.Module):
         return self.head(torch.cat([ce, co], dim=-1)).squeeze(-1)
 
 
+# ── EXTENDED MODELS (M11-M14) ────────────────────
+# Import lazily to avoid circular deps if models_extended isn't present
+try:
+    from inference.models_extended import (
+        ElectrolyteHealthModel, ReplenishabilityModel,
+        ChemIdentifier, FormationProtocolModel,
+    )
+    _HAS_EXTENDED = True
+except ImportError:
+    _HAS_EXTENDED = False
+
 # ── MODEL REGISTRY ───────────────────────────────
 MODEL_CLASSES = {
     "M1_CathodeUDE": CathodeUDE,
@@ -195,6 +206,14 @@ MODEL_CLASSES = {
     "M10_ChemRank": ChemRanker,
 }
 
+if _HAS_EXTENDED:
+    MODEL_CLASSES.update({
+        "M11_ElectrolyteHealth": ElectrolyteHealthModel,
+        "M12_Replenishability": ReplenishabilityModel,
+        "M13_ChemIdentifier": ChemIdentifier,
+        "M14_FormationProtocol": FormationProtocolModel,
+    })
+
 CHECKPOINT_NAMES = {
     "M1_CathodeUDE": "cathode_ude",
     "M2_SOH": "soh",
@@ -206,4 +225,8 @@ CHECKPOINT_NAMES = {
     "M8_Joint_SOH_RUL": "joint_soh_rul",
     "M9_KneeDetect": "knee_detect",
     "M10_ChemRank": "chem_rank",
+    "M11_ElectrolyteHealth": "electrolyte_health",
+    "M12_Replenishability": "replenishability",
+    "M13_ChemIdentifier": "chem_identifier",
+    "M14_FormationProtocol": "formation_protocol",
 }

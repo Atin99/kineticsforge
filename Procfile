@@ -1,1 +1,1 @@
-web: python serve_lite.py
+web: python serve.py

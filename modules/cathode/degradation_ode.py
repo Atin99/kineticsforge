@@ -214,14 +214,27 @@ class DegradationVectorField(nn.Module):
         self._current_scale = None
         self._current_shift = None
         self._current_T = torch.tensor(318.0)
+        self._current_c_rate = 1.0  # C-rate for SOC dynamics
 
-    def set_composition(self, comp_vec, T=318.0):
+    def set_composition(self, comp_vec, T=318.0, c_rate=1.0):
+        """Set composition, temperature, and C-rate for the next forward() calls.
+        
+        This vector field stores the current composition on the instance because
+        torchdiffeq calls forward(t, state) without extra arguments. Use one
+        DegradationVectorField per request/thread when serving concurrent users.
+
+        Args:
+            comp_vec: composition vector [Na, Mn, Fe, ...]
+            T: temperature in Kelvin
+            c_rate: charge/discharge rate relative to nominal capacity
+        """
         self._current_comp = comp_vec
         z, scale, shift = self.conditioner(comp_vec)
         self._current_z = z
         self._current_scale = scale
         self._current_shift = shift
         self._current_T = torch.tensor(T, device=comp_vec.device) if not isinstance(T, torch.Tensor) else T
+        self._current_c_rate = c_rate
 
     def forward(self, t, state):
         Q = state[..., 0:1]
@@ -238,13 +251,18 @@ class DegradationVectorField(nn.Module):
 
         t_input = t if isinstance(t, torch.Tensor) else torch.tensor(t, device=state.device)
         f_neural = self.neural_residual(state, z_comp, t_input)
-        physics_state, diagnostics = self.na_ion_physics(state, self._current_comp, self._current_T, t_input, k_fade)
+        physics_state, diagnostics = self.na_ion_physics(
+            state, self._current_comp, self._current_T, t_input, k_fade,
+            c_rate=self._current_c_rate
+        )
         self._last_physics_diagnostics = diagnostics
         alpha_n = torch.sigmoid(self.alpha_neural)
         dstate_known_residual = physics_state + alpha_n * f_neural
         dxdt = dstate_known_residual[..., 2:3]
         dUdx = self.ocv.dUdx(x, z_comp)
-        I_app = torch.ones_like(Q) * 0.001
+        # I_app from C-rate: I = C_rate * Q_nominal / 3600
+        # Q_nominal is from the physics module; use same value for consistency
+        I_app = torch.ones_like(Q) * (self._current_c_rate * self.na_ion_physics.Q_nominal_mAh / 3600.0)
         R_int = 0.05 + 0.001 * (1.0 - Q / (Q.detach().max() + 1e-8))
         dVdt_ocv = dUdx * dxdt - I_app * R_int
         dstate = torch.cat(

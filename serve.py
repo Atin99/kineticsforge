@@ -1,7 +1,7 @@
-"""Compatibility entrypoint for KineticsForge.
+"""Production entrypoint for KineticsForge.
 
-Render, Procfile, and local launch scripts should all use the same lightweight
-physics server so the web UI and API do not drift into separate behavior.
+Render, Procfile, Docker, and local launch scripts all use this entrypoint so
+the web UI and API do not drift into separate behavior.
 """
 import os
 
