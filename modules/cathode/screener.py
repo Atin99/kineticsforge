@@ -4,6 +4,7 @@ import math
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from core.india_context import IndiaOperatingContext
+from core.materials_physics import score_composition as physics_score_composition
 from modules.cathode.defect_chemistry import DefectChemistryModel
 from modules.cathode.composition_sampler import get_100_compositions, initial_capacity_prior, cycle_life_prior
 
@@ -158,96 +159,46 @@ def _score_composition(comp: Dict, T: float, cost_model: CostModel,
                         synth_scorer: SynthesizabilityScore,
                         elyte_compat: ElectrolyteCompatibility,
                         n_mc: int = 50) -> Dict:
-    q0 = initial_capacity_prior(comp)
-    cl = cycle_life_prior(comp)
-    k_fade = _arrhenius_fade_rate(comp, T)
-    jt = _jahn_teller_factor(comp["Mn"])
-    ss = _structural_stability(comp["Mn"])
-    na_mob = _na_mobility(comp["Na"])
-    fe_stab = 0.9 + 0.2 * comp["Fe"]
-
-    fade_mult, life_mult, cap_mult, vol_mult, rate_mult = DOPANT_EFFECTS.get(comp["dopant"], (1, 1, 1, 1, 1))
-
-    eff_fade = k_fade * jt * fade_mult / fe_stab
-    fade_500 = float(np.clip(1.0 - np.exp(-eff_fade * 500 ** 1.15), 0.02, 0.48))
-    q0_adj = q0 * cap_mult * na_mob
-    q_500 = q0_adj * (1.0 - fade_500)
-    cl_adj = int(cl * life_mult / jt)
-
-    rate_cap = (0.85 + 0.1 * comp["Fe"] - 0.05 * comp["Mn"]) * rate_mult
-    if comp["dopant"] == "Al":
-        rate_cap += 0.03
-
-    thermal_stab = ss * fe_stab
-    ce = 0.995 - 0.005 * comp["Mn"] + 0.002 * comp["Fe"]
-    if comp["dopant"]:
-        ce += 0.001
-
-    mn_w = comp["Mn"] / max(comp["Mn"] + comp["Fe"], 0.01)
-    fe_w = comp["Fe"] / max(comp["Mn"] + comp["Fe"], 0.01)
-    avg_voltage = mn_w * 3.75 + fe_w * 3.20 + 0.15 * (1.0 - comp["Na"])
-    energy_density = q0_adj * avg_voltage
-    vol_change = (2.0 + 3.0 * comp["Mn"] - 1.0 * comp["Fe"]) * vol_mult
-    if comp["dopant"] == "Ti":
-        vol_change *= 0.85
-
-    q0_samples = np.array([initial_capacity_prior(comp) for _ in range(n_mc)])
-    uncertainty = float(np.std(q0_samples))
-    epistemic_unc = uncertainty * (1.0 + 0.5 * abs(comp["Mn"] - 0.5))
-
-    phase_stab = phase_calc.thermodynamic_stability_score(comp)
-    thermal_abuse = thermal_screener.thermal_stability_score(comp)
-    defect = DefectChemistryModel().evaluate(comp)
+    physics = physics_score_composition(comp, temp_K=T)
     synth = synth_scorer.score(comp)
     elyte = elyte_compat.score(comp)
-    cost_kg = cost_model.cathode_cost_per_kg(comp)
-    cost_kwh = cost_model.cost_per_kwh(comp, energy_density)
     india = IndiaOperatingContext.from_env()
+    cost_kg = cost_model.cathode_cost_per_kg(comp)
+    cost_kwh = physics["cost_usd_kwh"]
     cost_inr_kg = india.usd_to_rupees(cost_kg)
     cost_inr_kwh = india.usd_to_rupees(cost_kwh)
-
-    synth_scores = [v for k, v in synth.items() if k != "best_route"]
-    score = (0.15 * (q0_adj / 180.0) +
-             0.18 * (1.0 - fade_500) +
-             0.10 * thermal_stab +
-             0.10 * (cl_adj / 600.0) +
-             0.08 * rate_cap +
-             0.07 * ce +
-             0.04 * (1.0 - vol_change / 10.0) +
-             0.08 * phase_stab +
-             0.06 * thermal_abuse +
-             0.06 * max(synth_scores) +
-             0.04 * elyte +
-             0.04 * max(0, 1.0 - cost_kwh / 200.0) +
-             0.05 * defect.defect_tolerance_score)
-
     return {
         "comp": comp,
-        "Q0": float(q0_adj),
-        "Q_500": float(q_500),
-        "fade_500": fade_500,
-        "fade": fade_500,
-        "cycle_life": cl_adj,
-        "score": float(score),
-        "uncertainty": float(epistemic_unc),
-        "thermal_stability": float(thermal_stab),
-        "rate_capability": float(rate_cap),
-        "coulombic_efficiency": float(ce),
-        "energy_density": float(energy_density),
-        "volumetric_change": float(vol_change),
-        "Ea_effective": float(0.55 + 0.1 * comp["Mn"]),
-        "jahn_teller_factor": float(jt),
-        "phase_stability": float(phase_stab),
-        "thermal_abuse_onset_C": float(thermal_screener.onset_temperature(comp)),
-        "thermal_abuse_score": float(thermal_abuse),
+        "Q0": float(physics["capacity"]),
+        "Q_500": float(physics["capacity_500"]),
+        "fade_500": float(physics["fade_500"]),
+        "fade": float(physics["fade_500"]),
+        "cycle_life": int(round(float(physics["cycle_life"]))),
+        "score": float(physics["score"]),
+        "uncertainty": float((1.0 - physics.get("confidence", 0.5)) * 25.0),
+        "thermal_stability": float(physics["stability"]),
+        "rate_capability": float(physics["rate_capability"]),
+        "coulombic_efficiency": float(0.995 - 0.006 * physics["fade_500"]),
+        "energy_density": float(physics["energy_density"]),
+        "volumetric_change": float(2.0 + 4.0 * physics["p2_o2_risk"] + 2.0 * physics["jt_index"]),
+        "Ea_effective": float(0.50 + 0.12 * physics["jt_index"] + 0.08 * physics["p2_o2_risk"]),
+        "jahn_teller_factor": float(1.0 + physics["jt_index"]),
+        "phase_stability": float(physics["phase_stability"]),
+        "phase_state": physics["phase_state"],
+        "ehull_ev_atom": float(physics["ehull_ev_atom"]),
+        "p2_o2_risk": float(physics["p2_o2_risk"]),
+        "mn_oxidation_state": float(physics["mn_oxidation_state"]),
+        "thermal_abuse_onset_C": float(physics["thermal_onset_C"]),
+        "thermal_abuse_score": float(np.clip((physics["thermal_onset_C"] - 170.0) / 125.0, 0.0, 1.0)),
         "synthesizability": synth,
         "electrolyte_compatibility": float(elyte),
-        "defect_tolerance_score": float(defect.defect_tolerance_score),
-        "oxygen_redox_risk": float(defect.oxygen_redox_risk),
-        "tm_mixing_risk": float(defect.transition_metal_mixing_risk),
-        "moisture_sensitivity": float(defect.moisture_sensitivity),
-        "charge_balance_error": float(defect.charge_balance_error),
-        "defect_compensation": defect.suggested_compensation,
+        "defect_tolerance_score": float(physics["defect_score"]),
+        "oxygen_redox_risk": float(physics["oxygen_risk"]),
+        "tm_mixing_risk": float(physics["tm_mixing_risk"]),
+        "moisture_sensitivity": float(physics["moisture_risk"]),
+        "charge_balance_error": float(physics["charge_balance_risk"]),
+        "site_balance_error": float(physics["site_balance_error"]),
+        "defect_compensation": "Adjust Na/TM stoichiometry or add stabilizing dopant" if physics["charge_balance_risk"] > 0.3 else "No compensation needed at screening level",
         "cost_usd_kg": float(cost_kg),
         "cost_usd_kwh": float(cost_kwh),
         "cost_inr_kg": float(cost_inr_kg),
@@ -258,7 +209,9 @@ def _score_composition(comp: Dict, T: float, cost_model: CostModel,
             "ambient_reference_C": float(india.ambient_hot_C),
             "usd_to_inr_assumption": float(india.usd_to_inr),
         },
-        "avg_voltage": float(avg_voltage),
+        "avg_voltage": float(physics["voltage"]),
+        "evidence": physics["evidence"],
+        "retention_curve": physics["retention_curve"],
     }
 
 

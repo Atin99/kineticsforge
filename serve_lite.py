@@ -72,6 +72,11 @@ except Exception as exc:  # pragma: no cover - keeps the production server boota
     logger.warning("BYOD analyzer unavailable: %s", exc)
     analyze_upload = None
 
+from core.materials_physics import (
+    score_composition as score_material_composition,
+    screen_batch as screen_material_batch,
+)
+
 
 class DegradationRequest(BaseModel):
     temperature_C: float = 45.0
@@ -129,6 +134,7 @@ class ScreenRequest(BaseModel):
     fe: float = 0.5
     al_doped: bool = False
     ti_doped: bool = False
+    temperature_K: float = 318.15
     upper_voltage: float = 4.10
     ehull_slope: float = 20.0
     w_capacity: float = 0.32
@@ -887,29 +893,52 @@ async def get_confidence(session_id: str):
 # Simple electrolyte recommendation (rule‑based)
 @app.post("/api/electrolyte_recommend")
 async def electrolyte_recommend(comp: ScreenRequest):
-    if comp.na >= 1.0 and comp.mn >= 0.5:
-        electrolyte = "carbonate (EC/EMC) with 1.0 M NaPF6"
-        additives = ["FEC", "VC"]
+    props = score_composition(
+        {"Na": comp.na, "Mn": comp.mn, "Fe": comp.fe, "al_doped": comp.al_doped, "ti_doped": comp.ti_doped},
+        temp_K=comp.temperature_K,
+        knobs={"upper_voltage": comp.upper_voltage},
+    )
+    if props["oxygen_risk"] > 0.55 or props["p2_o2_risk"] > 0.55:
+        electrolyte = "high-concentration NaFSI in DME/TMP blend"
+        additives = ["1-2 wt% FEC", "dry handling below 20 ppm H2O"]
+        rationale = "High phase/oxygen risk needs lower free-solvent activity and better oxidative CEI control."
+    elif props["jt_index"] > 0.35:
+        electrolyte = "carbonate EC/EMC with 1.0 M NaPF6"
+        additives = ["2 wt% FEC", "1 wt% VC", "Mn scavenger screen"]
+        rationale = "Mn3+-rich recipes need CEI support and transition-metal dissolution control."
+    elif comp.fe > comp.mn:
+        electrolyte = "glyme ether with 1.0 M NaTFSI"
+        additives = ["FEC confirmation screen"]
+        rationale = "Fe-rich low-voltage recipes benefit from faster Na desolvation in ether-rich solvation shells."
     else:
-        electrolyte = "ether‑based (DME) with 1.2 M NaTFSI"
-        additives = ["fluoroethylene carbonate"]
-    return {"electrolyte": electrolyte, "additives": additives}
+        electrolyte = "carbonate EC/PC with 1.0 M NaClO4 or NaPF6"
+        additives = ["3-5 wt% FEC", "1 wt% succinonitrile"]
+        rationale = "Balanced Mn/Fe layered oxide: use a carbonate baseline and validate CEI stability at the selected upper cutoff."
+    compatibility = max(0.0, min(1.0, 0.82 - 0.30 * props["oxygen_risk"] - 0.18 * props["charge_balance_risk"] + 0.10 * props["rate_capability"]))
+    return {"electrolyte": electrolyte, "additives": additives, "rationale": rationale, "compatibility": round(compatibility, 3), "materials": props}
 
-# Rag‑one prediction (simple analytic proxy)
+
 @app.get("/api/ragone")
 async def ragone(na: float = 1.0, mn: float = 0.5, fe: float = 0.5, c_rate: float = 1.0):
-    energy = 250 * (na + 0.5 * mn + 0.3 * fe)
-    power = 500 / (1 + 0.5 * c_rate)
-    return {"energy_wh_kg": round(energy, 1), "power_w_kg": round(power, 1)}
+    props = score_composition({"Na": na, "Mn": mn, "Fe": fe})
+    cr = clamp(c_rate, 0.05, 10.0)
+    rate_cap = max(0.05, props["rate_capability"])
+    rate_penalty = 1.0 / (1.0 + (cr / max(0.25, 2.2 * rate_cap)) ** 1.35)
+    voltage_drop = 0.035 * cr / rate_cap
+    voltage = max(2.0, props["voltage"] - voltage_drop)
+    energy = props["capacity"] * voltage * rate_penalty
+    power = energy * cr
+    return {"energy_wh_kg": round(energy, 1), "power_w_kg": round(power, 1), "rate_capability": props["rate_capability"]}
 
-# Range estimator – uses WLTP profile as example
+
 @app.get("/api/range_estimate")
 async def range_estimate(soh: float = 1.0, energy_wh_kg: float = 250.0, vehicle_efficiency_kwh_per_100km: float = 0.15):
-    usable_kwh = soh * energy_wh_kg * 0.2
-    range_km = usable_kwh / vehicle_efficiency_kwh_per_100km * 100
-    return {"estimated_range_km": round(range_km, 1)}
+    eff = vehicle_efficiency_kwh_per_100km * 100.0 if vehicle_efficiency_kwh_per_100km < 1.0 else vehicle_efficiency_kwh_per_100km
+    usable_kwh = clamp(soh, 0.0, 1.05) * max(0.0, energy_wh_kg) * 495.0 / 1000.0 * 0.92
+    range_km = usable_kwh / max(1e-6, eff) * 100.0
+    return {"estimated_range_km": round(range_km, 1), "usable_kwh": round(usable_kwh, 2), "efficiency_kwh_per_100km": round(eff, 2)}
 
-# WebSocket for live BMS streaming (demo – sends stored result after short pause)
+
 @app.websocket("/ws/bms/{session_id}")
 async def bms_ws(websocket: WebSocket, session_id: str):
     await websocket.accept()
@@ -1185,80 +1214,11 @@ def simulate_bms(req: BMSRequest) -> Dict:
 
 
 def score_composition(comp: Dict[str, float], temp_K: float = 318.15, knobs: Optional[Dict[str, float]] = None) -> Dict[str, float]:
-    knobs = knobs or comp
-    upper_voltage = clamp(float(knobs.get("upper_voltage", 4.10)), 3.60, 4.50)
-    ehull_slope = max(1.0, float(knobs.get("ehull_slope", 20.0)))
-    w_capacity = float(knobs.get("w_capacity", 0.32))
-    w_stability = float(knobs.get("w_stability", 0.32))
-    w_fade = float(knobs.get("w_fade", 0.22))
-    w_cost = float(knobs.get("w_cost", 0.14))
-    al = bool(comp.get("al_doped", False))
-    ti = bool(comp.get("ti_doped", False))
-    fade_mult, life_mult, cap_mult, vol_mult, rate_mult = (0.90, 1.10, 0.99, 0.90, 1.08) if ti else ((0.82, 1.18, 0.97, 0.85, 1.05) if al else (1, 1, 1, 1, 1))
-    dop_frac = (0.04 if al else 0.0) + (0.03 if ti else 0.0)
-    na, mn, fe = comp["Na"], comp["Mn"], comp["Fe"]
-    q0 = (120.0 + 40.0 * mn - 20.0 * fe) * cap_mult * (1.0 - 0.5 * abs(na - 1.0))
-    ea = 0.55 + 0.1 * mn - 0.03 * fe
-    k_fade = 1e-4 * (1.0 + 0.2 * fe) * math.exp(-ea * 96485.0 / (8.314 * temp_K))
-    jt = 1.0 + 0.3 * max(0.0, mn - 0.5)
-    ss = 1.0 / (1.0 + math.exp(-8.0 * (0.5 - mn)))
-    fe_stab = 0.9 + 0.2 * fe
-    voltage_stress = 1.0 + 1.8 * sigmoid((upper_voltage - 4.05) / 0.08)
-    fade_500 = clamp(1.0 - math.exp(-(k_fade * jt * fade_mult / fe_stab) * voltage_stress * 500.0 ** 1.15), 0.02, 0.48)
-    cycle_life = 400.0 * life_mult / jt * (0.85 if mn > 0.6 else 1.0)
-    # Voltage from weighted redox couples: Fe3+/4+ ~3.20V, Mn3+/4+ ~3.75V in P2-type
-    # (Yabuuchi & Komaba 2014, Clément et al. 2015)
-    fe_w = fe / max(mn + fe, 0.01)
-    mn_w = mn / max(mn + fe, 0.01)
-    avg_voltage = mn_w * 3.75 + fe_w * 3.20 + 0.15 * (1.0 - na)
-    energy_density = q0 * avg_voltage
-    e_form = -4.2 - 0.6 * mn - 0.35 * fe - 0.4 * na - (0.048 if al else 0.0) - (0.054 if ti else 0.0)
-    ehull = max(0.0, e_form - (-4.0 - 0.3 * mn - 0.2 * fe) + 0.05)
-    phase_stab = 1.0 / (1.0 + math.exp(ehull_slope * (ehull - 0.05)))
-    thermal_abuse = clamp((250.0 - 30.0 * max(0.0, mn - 0.5) + 15.0 * fe + (8.0 if al else 0.0) + (7.5 if ti else 0.0) - 180.0) / 120.0, 0.0, 1.0)
-    oxygen_risk = clamp(0.22 + max(0.0, mn - 0.55) + max(0.0, 1.0 - na) * 0.8 + 0.24 * sigmoid((upper_voltage - 4.15) / 0.07) - (0.06 if al else 0.0) - (0.08 if ti else 0.0), 0.0, 1.0)
-    mixing_risk = clamp(0.18 + abs(mn - fe) * 0.35 + max(0.0, 0.98 - na) * 1.2 + (0.03 if ti else -0.02 if al else 0.0), 0.0, 1.0)
-    moisture = clamp(0.20 + max(0.0, na - 0.98) * 0.9 + max(0.0, 1.0 - na) * 2.2, 0.0, 1.0)
-    jt_index = clamp((mn - 0.48) * 1.8 - (0.18 if ti else 0.0), 0.0, 1.0)
-    defect_score = clamp(1.0 - (0.24 * oxygen_risk + 0.22 * mixing_risk + 0.20 * moisture + 0.24 * jt_index), 0.0, 1.0)
-    cost_kg = na * 3.1 * 0.23 + mn * 2.4 * 0.55 + fe * 0.45 * 0.56 + dop_frac * (11.0 * 0.479 if ti else 2.7 * 0.27 if al else 0.0) + 2.5
-    cost_kwh = cost_kg / max(energy_density / 1000.0, 0.01)
-    stability = clamp(0.28 * (1.0 - fade_500) + 0.18 * ss * fe_stab + 0.18 * phase_stab + 0.16 * thermal_abuse + 0.20 * defect_score, 0.0, 1.0)
-    # Mn valence from charge balance: Na + Mn*v_Mn + Fe*3 + dop*v_dop = 4 (for AMO2)
-    dop_charge = (0.04 * 3.0 if al else 0.0) + (0.03 * 4.0 if ti else 0.0)
-    mn_ox = clamp((4.0 - na - fe * 3.0 - dop_charge) / max(mn, 0.01), 3.0, 4.0)
-    fe_ox = 3.0
-    total_charge = na + mn * mn_ox + fe * fe_ox + dop_charge
-    charge_balance_risk = clamp(abs(total_charge - 4.0) / 1.4, 0.0, 1.0)
-    score = w_capacity * (q0 / 180.0) + w_stability * stability + w_fade * (1.0 - fade_500) + w_cost * max(0.0, 1.0 - cost_kwh / 200.0) - 0.08 * charge_balance_risk
-    return {
-        "capacity": round(q0, 3),
-        "capacity_500": round(q0 * (1.0 - fade_500), 3),
-        "fade_500": round(fade_500, 5),
-        "cycle_life": round(cycle_life, 1),
-        "voltage": round(avg_voltage, 4),
-        "stability": round(stability, 4),
-        "jt_index": round(jt_index, 4),
-        "energy_density": round(energy_density, 3),
-        "cost_usd_kwh": round(cost_kwh, 2),
-        "oxygen_risk": round(oxygen_risk, 4),
-        "charge_balance_risk": round(charge_balance_risk, 4),
-        "score": round(score, 5),
-    }
+    return score_material_composition(comp, temp_K=temp_K, knobs=knobs)
 
 
 def screen_batch(n: int = 100, temp_K: float = 318.15, knobs: Optional[Dict[str, float]] = None) -> List[Dict]:
-    out = []
-    for na in np.linspace(0.84, 1.12, 8):
-        for mn in np.linspace(0.20, 0.82, 16):
-            for dop in ("none", "al", "ti"):
-                fe = clamp(1.0 - mn - (0.04 if dop == "al" else 0.03 if dop == "ti" else 0.0), 0.12, 0.82)
-                comp = {"Na": float(na), "Mn": float(mn), "Fe": float(fe), "al_doped": dop == "al", "ti_doped": dop == "ti"}
-                prop = score_composition(comp, temp_K=temp_K, knobs=knobs)
-                score = prop["score"]
-                out.append({"composition": comp, "properties": prop, "score": round(score, 5)})
-    out.sort(key=lambda x: x["score"], reverse=True)
-    return out[: max(1, min(n, len(out)))]
+    return screen_material_batch(n=n, temp_K=temp_K, knobs=knobs)
 
 
 def beta_mean(a: float, b: float) -> float:
@@ -1381,7 +1341,17 @@ def api_screen(req: ScreenRequest):
         "w_fade": req.w_fade,
         "w_cost": req.w_cost,
     }
-    return {"composition": comp, "predicted": score_composition(comp, knobs=knobs), "candidates": screen_batch(24, knobs=knobs)}
+    predicted = score_composition(comp, temp_K=req.temperature_K, knobs=knobs)
+    return {
+        "composition": comp,
+        "predicted": predicted,
+        "candidates": screen_batch(48, temp_K=req.temperature_K, knobs=knobs),
+        "evidence": predicted.get("evidence", {}),
+        "provenance": {
+            "model": "core.materials_physics.score_composition",
+            "basis": predicted.get("model_basis"),
+        },
+    }
 
 
 async def _analyze_byod_file(file: UploadFile, require_checkpoint: bool = False) -> Dict[str, Any]:

@@ -502,6 +502,7 @@ function clearRunHistory() {
 }
 
 // Diffusion-limited SEI: single coefficient replaces old dual-term (constant + sqrt) model.
+// Ploehn-Ramadass parabolic kinetics: dQ_SEI/dN ~ 1/(2*sqrt(N)), no hidden Nf parameter.
 var SEI_GROWTH_COEFF = 0.048;
 var SEI_REF_EA = 0.56;
 var SEI_REF_TEMP = 318.15;
@@ -510,6 +511,12 @@ var JT_LOSS_COEFF = 6.5e-3;
 var DESOLV_LOSS_COEFF = 2.5e-4;
 var BV_RATE_LOSS_COEFF = 1.2e-4;
 var RESIDUAL_LOSS_COEFF = 1.0e-5;
+// P2-O2 branching ratio from Lu et al. 2023 (J. Electrochem. Soc. 170, 010527):
+// ~65% of interlayer capacity loss in Mn-rich P2-type Na(Mn,Fe)O2 is attributable
+// to the P2-O2 structural transition above the critical SOC.
+// This factor is now absorbed into the default P2 rate knob value (0.0028 * 0.65 = 0.00182)
+// so the user can override it by adjusting a single knob without a hidden multiplier.
+var RESIDUAL_MAX_FRACTION = 0.15; // residual can't exceed 15% of total explicit loss
 var RECYCLING_MC_SAMPLES = 200;
 
 // Navigation
@@ -700,7 +707,7 @@ function degradationKnobs() {
   return {
     seiScale: num("diag-k-sei", 1.0),
     seiEa: num("diag-ea-sei", 0.56),
-    p2Rate: num("diag-p2-k", 0.0028),
+    p2Rate: num("diag-p2-k", 0.00182),  // 0.0028 * 0.65 branching ratio absorbed
     p2Soc: num("diag-p2-soc", 0.78),
     jtScale: num("diag-jt-scale", 1.0),
     bvScale: num("diag-bv-scale", 1.0),
@@ -770,14 +777,17 @@ function simulateDegradation(options) {
     var scale = GLOBAL_DEGRADATION_SCALE * stress;
     var sqrtIncrement = Math.sqrt(i) - Math.sqrt(i - 1);
     var seiLoss = enableSei ? Q * terms.seiRate * SEI_GROWTH_COEFF * sqrtIncrement * scale : 0;
-    var p2Loss = enableP2 ? Q * 0.65 * terms.p2o2Rate * scale : 0;
+    var p2Loss = enableP2 ? Q * terms.p2o2Rate * scale : 0;
     var jtLoss = enableJt ? Q * JT_LOSS_COEFF * terms.jt * scale : 0;
     var desolvLoss = Q * DESOLV_LOSS_COEFF * Math.log1p(terms.desolv) * scale;
     var exchangeProxy = clamp(0.34 + 0.18 * comp.Fe - 0.08 * Math.log1p(terms.desolv) + 0.04 * (1 - terms.beta), 0.08, 0.9);
     var eta = Math.asinh(cRate / (2 * exchangeProxy));
     var rateStress = 1 + 0.20 * Math.pow(Math.max(0, cRate - 1.5), 2);
     var rateLoss = Q * cfg.bvScale * BV_RATE_LOSS_COEFF * eta * eta * rateStress * scale;
-    var residualLoss = enableNeural ? Q * cfg.residualScale * RESIDUAL_LOSS_COEFF * sigmoid((i / nCycles - 0.62) / 0.16) * (0.8 + 0.35 * cRate) : 0;
+    var explicitLoss = seiLoss + p2Loss + jtLoss + desolvLoss + rateLoss;
+    var rawResidualLoss = enableNeural ? Q * cfg.residualScale * RESIDUAL_LOSS_COEFF * sigmoid((i / nCycles - 0.62) / 0.16) * (0.8 + 0.35 * cRate) : 0;
+    // Bound residual so it can't absorb more than RESIDUAL_MAX_FRACTION of total explicit terms
+    var residualLoss = Math.min(rawResidualLoss, explicitLoss * RESIDUAL_MAX_FRACTION);
     var dQ = seiLoss + p2Loss + jtLoss + desolvLoss + rateLoss + residualLoss;
     Q = clamp(Q - dQ, 0.25, 1.02);
     p2 += p2Loss; jt += jtLoss; sei += seiLoss + desolvLoss; rate += rateLoss; res += residualLoss;
@@ -993,7 +1003,7 @@ function exportBmsCSV() {
 function exportMaterialsCSV() {
   var mat = window.__kfMaterials || {};
   var comp = mat.comp || {};
-  downloadCSV([{ Na: comp.Na, Mn: comp.Mn, Fe: comp.Fe, Al: !!comp.al, Ti: !!comp.ti, capacity_mAh_g: mat.Q0, voltage_V: mat.avgVoltage, stability: mat.stability, fade500: mat.fade500, score: mat.score, oxygen_risk: mat.oxygenRisk, charge_risk: mat.chargeRisk }], "kineticsforge_materials.csv");
+  downloadCSV([{ Na: comp.Na, Mn: comp.Mn, Fe: comp.Fe, Al: !!comp.al, Ti: !!comp.ti, capacity_mAh_g: mat.Q0, voltage_V: mat.avgVoltage, stability: mat.stability, phase_state: mat.phaseState, phase_stability: mat.phaseStability, p2_o2_risk: mat.p2Risk, fade500: mat.fade500, cycle_life: mat.cycleLife, score: mat.score, oxygen_risk: mat.oxygenRisk, charge_risk: mat.chargeRisk, site_error: mat.siteError, confidence: mat.confidence }], "kineticsforge_materials.csv");
 }
 
 function exportRecyclingCSV() {
@@ -1127,6 +1137,18 @@ function exportMaterialsJSON() {
       charge_balance_risk: mat.chargeRisk,
       energy_density: mat.energyDensity,
       cost_usd_kwh: mat.costKwh
+    },
+    physics: {
+      phase_state: mat.phaseState,
+      phase_stability: mat.phaseStability,
+      p2_o2_risk: mat.p2Risk,
+      mn_oxidation_state: mat.mnOx,
+      mn3_fraction: mat.mn3Fraction,
+      site_balance_error: mat.siteError,
+      confidence: mat.confidence,
+      evidence: mat.evidence,
+      mechanisms: mat.mechanisms,
+      retention_curve: mat.retentionCurve
     },
     candidates: mat.candidates || []
   };
@@ -1579,11 +1601,21 @@ function exportBYODJSON() {
 }
 
 function testMaterialInDiagnostics() {
-  var comp = {
+  var mat = window.__kfMaterials || {};
+  var norm = mat.normalized || normalizeMaterialComposition({
     Na: parseFloat(document.getElementById("na-slider").value),
     Mn: parseFloat(document.getElementById("mn-slider").value),
     Fe: parseFloat(document.getElementById("fe-slider").value),
-    dopant_frac: (document.getElementById("sw-al").checked ? 0.04 : 0) + (document.getElementById("sw-ti").checked ? 0.03 : 0)
+    al: document.getElementById("sw-al").checked,
+    ti: document.getElementById("sw-ti").checked
+  });
+  var dopants = norm.dopants || norm;
+  var dopFrac = Number(dopants.Al || 0) + Number(dopants.Ti || 0);
+  var comp = {
+    Na: Number(norm.Na != null ? norm.Na : parseFloat(document.getElementById("na-slider").value)),
+    Mn: Number(norm.Mn != null ? norm.Mn : parseFloat(document.getElementById("mn-slider").value)),
+    Fe: Number(norm.Fe != null ? norm.Fe : parseFloat(document.getElementById("fe-slider").value)),
+    dopant_frac: dopFrac
   };
   setDiagnosticComposition(comp);
   navigate("diagnostics");
@@ -2034,12 +2066,16 @@ function runBmsSweep() {
   });
 }
 
-// Materials screening mirror from modules/cathode/screener.py.
-function dopantEffects(comp) {
-  if (comp.ti) return { fade: 0.90, life: 1.10, cap: 0.99, vol: 0.90, rate: 1.08 };
-  if (comp.al) return { fade: 0.82, life: 1.18, cap: 0.97, vol: 0.85, rate: 1.05 };
-  return { fade: 1, life: 1, cap: 1, vol: 1, rate: 1 };
-}
+// Materials screening mirror from core/materials_physics.py.
+var MATERIAL_DOPANTS = {
+  Al: { frac: 0.04, valence: 3.0, phase: 0.34, jt: 0.16, p2: 0.42, rate: 0.04, mass: 26.9815, cost: 2.7 },
+  Ti: { frac: 0.03, valence: 4.0, phase: 0.28, jt: 0.44, p2: 0.30, rate: 0.08, mass: 47.867, cost: 11.0 }
+};
+var MATERIAL_EVIDENCE_ANCHORS = [
+  { formula: "Na0.67Fe0.3Mn0.7O2", Na: 0.67, Mn: 0.70, Fe: 0.30, retention: 0.826, cycles: 300, cRate: 5 },
+  { formula: "Na0.75Co0.125Cu0.125Fe0.125Ni0.125Mn0.5O2", Na: 0.75, Mn: 0.50, Fe: 0.125, capacity: 70, retention: 0.96, cycles: 500, cRate: 1 },
+  { formula: "Na0.76Mn0.5Ni0.3Fe0.1Mg0.1O2", Na: 0.76, Mn: 0.50, Fe: 0.10, retention: 0.80, cycles: 700 }
+];
 function materialKnobs() {
   return {
     wCap: num("mat-w-cap", 0.32),
@@ -2050,58 +2086,215 @@ function materialKnobs() {
     ehullSlope: Math.max(1, num("mat-ehull-slope", 20))
   };
 }
+function materialDopants(comp) {
+  var out = {};
+  if (comp.al || comp.al_doped) out.Al = MATERIAL_DOPANTS.Al.frac;
+  if (comp.ti || comp.ti_doped) out.Ti = MATERIAL_DOPANTS.Ti.frac;
+  return out;
+}
+function normalizeMaterialComposition(comp) {
+  var dop = materialDopants(comp);
+  var na = clamp(Number(comp.Na != null ? comp.Na : comp.na) || 1.0, 0.45, 1.30);
+  var mnRaw = clamp(Number(comp.Mn != null ? comp.Mn : comp.mn) || 0.5, 0, 1.4);
+  var feRaw = clamp(Number(comp.Fe != null ? comp.Fe : comp.fe) || 0.5, 0, 1.4);
+  var dopRaw = Object.keys(dop).reduce(function (a, k) { return a + dop[k]; }, 0);
+  var tmTotal = Math.max(1e-9, mnRaw + feRaw + dopRaw);
+  var siteDop = {};
+  Object.keys(dop).forEach(function (k) { siteDop[k] = dop[k] / tmTotal; });
+  return {
+    Na: na,
+    Mn: mnRaw / tmTotal,
+    Fe: feRaw / tmTotal,
+    dopants: siteDop,
+    dopantTotal: dopRaw / tmTotal,
+    tmTotalRaw: tmTotal,
+    siteError: tmTotal - 1,
+    siteErrorAbs: Math.abs(tmTotal - 1),
+    al: !!(comp.al || comp.al_doped),
+    ti: !!(comp.ti || comp.ti_doped)
+  };
+}
+function dopantStrength(norm, key) {
+  return clamp(Object.keys(norm.dopants).reduce(function (sum, el) {
+    var meta = MATERIAL_DOPANTS[el] || {};
+    return sum + (norm.dopants[el] / Math.max(1e-6, meta.frac || 0.04)) * (meta[key] || 0);
+  }, 0), 0, 1);
+}
+function nearestMaterialEvidence(norm) {
+  var best = null;
+  MATERIAL_EVIDENCE_ANCHORS.forEach(function (a) {
+    var d = Math.sqrt(
+      1.6 * Math.pow(norm.Na - a.Na, 2) +
+      1.2 * Math.pow(norm.Mn - a.Mn, 2) +
+      1.0 * Math.pow(norm.Fe - a.Fe, 2)
+    );
+    if (!best || d < best.distance) best = Object.assign({ distance: d }, a);
+  });
+  return best || { distance: 1, formula: "none" };
+}
+function simulateMaterialRetention(fadeTerms, cycleLimit) {
+  var beta = 0.72;
+  var k = Object.keys(fadeTerms).reduce(function (a, n) { return a + Math.max(0, fadeTerms[n]); }, 0);
+  k = Math.max(k, 1e-7);
+  var p2Frac = (fadeTerms.p2_o2 || 0) / k;
+  var jtFrac = (fadeTerms.jahn_teller || 0) / k;
+  var cycles = Math.max(1000, Math.min(2200, Math.round(cycleLimit || 1200)));
+  var knee = clamp((0.58 - 0.18 * p2Frac - 0.10 * jtFrac) * cycles, 80, cycles * 0.92);
+  var xs = [], ys = [], lo = [], hi = [];
+  var step = Math.max(1, Math.floor(cycles / 240));
+  for (var n = 0; n <= cycles; n += step) {
+    var accel = n > knee ? 1 + (p2Frac * 0.75 + jtFrac * 0.35) * Math.pow((n - knee) / Math.max(1, cycles - knee), 1.35) : 1;
+    var cap = clamp(1 - (1 - Math.exp(-k * Math.pow(n, beta) * accel)), 0.42, 1.01);
+    var band = clamp(0.012 + 0.055 * Math.sqrt(n / cycles), 0, 0.12);
+    xs.push(n); ys.push(cap); lo.push(clamp(cap - band, 0.35, 1.01)); hi.push(clamp(cap + band, 0.35, 1.04));
+  }
+  var eol = null;
+  for (var i = 0; i < ys.length; i++) { if (ys[i] <= 0.8) { eol = xs[i]; break; } }
+  return { cycles: xs, retention: ys, lo: lo, hi: hi, knee_cycle: Math.round(knee), eol80_cycle: eol };
+}
 function scoreComposition(comp, T, cfg) {
   T = T || 318.15;
   cfg = cfg || materialKnobs();
-  var eff = dopantEffects(comp);
-  var dopFrac = (comp.al ? 0.04 : 0) + (comp.ti ? 0.03 : 0);
-  var q0 = (120 + 40 * comp.Mn - 20 * comp.Fe) * eff.cap * (1 - 0.5 * Math.abs(comp.Na - 1.0));
-  var Ea = 0.55 + 0.1 * comp.Mn - 0.03 * comp.Fe;
-  var kFade = 1e-4 * (1 + 0.2 * comp.Fe) * Math.exp(-Ea * 96485 / (8.314 * T));
-  var jt = 1 + 0.3 * Math.max(0, comp.Mn - 0.5);
-  var ss = 1 / (1 + Math.exp(-8 * (0.5 - comp.Mn)));
-  var feStab = 0.9 + 0.2 * comp.Fe;
-  var effFade = kFade * jt * eff.fade / feStab;
-  var voltageStress = 1 + 1.8 * sigmoid((cfg.upperV - 4.05) / 0.08);
-  var fade500 = clamp(1 - Math.exp(-effFade * voltageStress * Math.pow(500, 1.15)), 0.02, 0.48);
-  var cycleLife = 400 * eff.life / jt * (comp.Mn > 0.6 ? 0.85 : 1);
-  var rateCap = (0.85 + 0.1 * comp.Fe - 0.05 * comp.Mn) * eff.rate + (comp.al ? 0.03 : 0);
-  // Voltage from weighted redox couples: Fe3+/4+ ~3.20V, Mn3+/4+ ~3.75V in P2-type
-  var feW = comp.Fe / Math.max(comp.Mn + comp.Fe, 0.01);
-  var mnW = comp.Mn / Math.max(comp.Mn + comp.Fe, 0.01);
-  var avgVoltage = mnW * 3.75 + feW * 3.20 + 0.15 * (1.0 - comp.Na);
+  var norm = normalizeMaterialComposition(comp);
+  var na = norm.Na, mn = norm.Mn, fe = norm.Fe;
+  var phaseStabilization = dopantStrength(norm, "phase");
+  var jtSuppression = dopantStrength(norm, "jt");
+  var p2Suppression = dopantStrength(norm, "p2");
+  var dopCharge = Object.keys(norm.dopants).reduce(function (sum, el) { return sum + norm.dopants[el] * (MATERIAL_DOPANTS[el].valence || 3); }, 0);
+  var mnOxRaw = (4.0 - na - 3.0 * fe - dopCharge) / Math.max(mn, 1e-6);
+  var mnOxError = Math.max(0, 3.0 - mnOxRaw, mnOxRaw - 4.0);
+  var mnOx = clamp(mnOxRaw, 3.0, 4.0);
+  var mn3 = clamp(4.0 - mnOx, 0, 1);
+  var chargeRisk = clamp(0.65 * mnOxError + 0.90 * norm.siteErrorAbs, 0, 1);
+  var naMobility = clamp(1 - 1.15 * Math.abs(na - 0.88) + 0.08 * sigmoid((na - 0.65) / 0.08), 0.22, 1);
+  var feGate = sigmoid((cfg.upperV - 4.02) / 0.10);
+  var mnUtil = clamp(0.70 + 0.17 * sigmoid((cfg.upperV - 3.72) / 0.12) - 0.20 * chargeRisk - 0.12 * norm.siteErrorAbs, 0.15, 0.94);
+  var feUtil = clamp(0.14 + 0.58 * feGate - 0.10 * chargeRisk, 0.05, 0.72);
+  var oxygenE = clamp((cfg.upperV - 4.18) * 0.75, 0, 0.16) * mn * clamp(1 - na, 0, 0.45);
+  var mnE = mn * mn3 * mnUtil;
+  var feE = fe * feUtil;
+  var eFormula = Math.min(clamp(na - 0.22 - 0.08 * norm.siteErrorAbs, 0, 0.92), mnE + feE + oxygenE);
+  var mass = na * 22.9898 + mn * 54.938 + fe * 55.845 + 2 * 15.999;
+  Object.keys(norm.dopants).forEach(function (el) { mass += norm.dopants[el] * MATERIAL_DOPANTS[el].mass; });
+  var utilization = clamp(0.94 * naMobility - 0.20 * norm.siteErrorAbs - 0.10 * chargeRisk, 0.35, 0.98);
+  var q0 = 26801 * eFormula / Math.max(1e-6, mass) * utilization;
+  var denom = Math.max(1e-9, mnE + feE + oxygenE);
+  var avgVoltage = ((mnE * (3.50 + 0.24 * (1 - mn3) + 0.05 * (cfg.upperV - 4.0))) + (feE * (3.18 + 0.08 * feGate)) + oxygenE * 4.15) / denom + 0.06 * (0.85 - na);
+  avgVoltage = clamp(avgVoltage, 2.60, Math.min(cfg.upperV, 4.35));
+  var p2Crit = 4.04 + 0.12 * fe + 0.18 * phaseStabilization - 0.13 * mn3 - 0.08 * Math.max(0, 0.78 - na);
+  var p2Risk = clamp(sigmoid((cfg.upperV - p2Crit) / 0.075) * (0.35 + 0.65 * sigmoid((0.86 - na) / 0.12)) * (1 - 0.52 * p2Suppression), 0, 1);
+  var jtRisk = clamp(mn * mn3 * (1 - 0.55 * jtSuppression) * (1 + 0.18 * sigmoid((cfg.upperV - 4.05) / 0.10)), 0, 1);
+  var oxygenRisk = clamp(0.12 + 0.54 * p2Risk + 0.34 * clamp(cfg.upperV - 4.10, 0, 0.35) / 0.35 + 0.30 * Math.max(0, 0.76 - na) + 0.18 * mn * (1 - mn3) - 0.20 * phaseStabilization, 0, 1);
+  var mixingRisk = clamp(0.10 + 0.28 * Math.abs(mn - fe) + 0.34 * norm.siteErrorAbs + 0.16 * Math.max(0, 0.72 - na) - 0.10 * phaseStabilization, 0, 1);
+  var moistureRisk = clamp(0.16 + 0.62 * Math.abs(na - 0.92) + 0.18 * norm.siteErrorAbs, 0, 1);
+  var defectScore = clamp(1 - (0.26 * oxygenRisk + 0.22 * mixingRisk + 0.18 * moistureRisk + 0.24 * jtRisk + 0.22 * chargeRisk), 0, 1);
+  var ehull = clamp(0.020 + 0.080 * Math.max(0, 0.78 - na) + 0.050 * norm.siteErrorAbs + 0.038 * oxygenRisk + 0.030 * mixingRisk + 0.018 * chargeRisk - 0.022 * phaseStabilization, 0, 0.26);
+  var phaseStab = 1 / (1 + expClamp(cfg.ehullSlope * (ehull - 0.055), -40, 40));
+  var thermalOnset = 238 - 42 * oxygenRisk - 24 * jtRisk + 24 * phaseStabilization + 10 * fe;
+  var thermalAbuse = clamp((thermalOnset - 170) / 125, 0, 1);
+  var rateCap = clamp(0.45 + 0.42 * naMobility + 0.12 * fe + 0.12 * dopantStrength(norm, "rate") - 0.16 * chargeRisk, 0.05, 1);
+  var arrh = expClamp(-0.42 / 8.617e-5 * (1 / T - 1 / 318.15), -3, 3);
+  var fadeTerms = {
+    sei: 2.7e-4 * arrh * (0.75 + 0.50 * moistureRisk),
+    p2_o2: 7.5e-4 * p2Risk * (0.75 + 0.35 * sigmoid((cfg.upperV - 4.05) / 0.08)),
+    jahn_teller: 5.8e-4 * jtRisk,
+    oxygen: 4.2e-4 * oxygenRisk,
+    rate: 2.6e-4 * (1 - rateCap),
+    charge_site: 4.8e-4 * chargeRisk
+  };
+  var fadeK = Object.keys(fadeTerms).reduce(function (a, k) { return a + fadeTerms[k]; }, 0);
+  var fade500 = clamp(1 - Math.exp(-fadeK * Math.pow(500, 0.72)), 0.002, 0.68);
+  var cycleLife = clamp(Math.pow(-Math.log(0.80) / Math.max(fadeK, 1e-7), 1 / 0.72), 50, 5000);
   var energyDensity = q0 * avgVoltage;
-  var volChange = (2.0 + 3.0 * comp.Mn - comp.Fe) * eff.vol;
-  var eForm = -4.2 - 0.6 * comp.Mn - 0.35 * comp.Fe - 0.4 * comp.Na - (comp.al ? 0.048 : 0) - (comp.ti ? 0.054 : 0);
-  var eHullProducts = -4.0 - 0.3 * comp.Mn - 0.2 * comp.Fe;
-  var ehull = Math.max(0, eForm - eHullProducts + 0.05);
-  var phaseStab = 1 / (1 + Math.exp(cfg.ehullSlope * (ehull - 0.05)));
-  var thermalAbuse = clamp((250 - 30 * Math.max(0, comp.Mn - 0.5) + 15 * comp.Fe + (comp.al ? 8 : 0) + (comp.ti ? 7.5 : 0) - 180) / 120, 0, 1);
-  var oxygenRisk = clamp(0.22 + Math.max(0, comp.Mn - 0.55) + Math.max(0, 1 - comp.Na) * 0.8 + 0.24 * sigmoid((cfg.upperV - 4.15) / 0.07) - (comp.al ? 0.06 : 0) - (comp.ti ? 0.08 : 0), 0, 1);
-  var mixingRisk = clamp(0.18 + Math.abs(comp.Mn - comp.Fe) * 0.35 + Math.max(0, 0.98 - comp.Na) * 1.2 + (comp.ti ? 0.03 : comp.al ? -0.02 : 0), 0, 1);
-  var moisture = clamp(0.20 + Math.max(0, comp.Na - 0.98) * 0.9 + Math.max(0, 1 - comp.Na) * 2.2, 0, 1);
-  var jtRisk = clamp((comp.Mn - 0.48) * 1.8 - (comp.ti ? 0.18 : 0), 0, 1);
-  var defectScore = clamp(1 - (0.24 * oxygenRisk + 0.22 * mixingRisk + 0.20 * moisture + 0.24 * jtRisk), 0, 1);
-  var costKg = comp.Na * 3.1 * 0.23 + comp.Mn * 2.4 * 0.55 + comp.Fe * 0.45 * 0.56 + dopFrac * (comp.ti ? 11.0 * 0.479 : comp.al ? 2.7 * 0.27 : 0) + 2.5;
+  var costKg = 2.5 + (na * 22.9898 / mass) * 3.1 + (mn * 54.938 / mass) * 2.4 + (fe * 55.845 / mass) * 0.45;
+  Object.keys(norm.dopants).forEach(function (el) { costKg += (norm.dopants[el] * MATERIAL_DOPANTS[el].mass / mass) * MATERIAL_DOPANTS[el].cost; });
   var costKwh = costKg / Math.max(energyDensity / 1000, 0.01);
-  var stability = clamp(0.28 * (1 - fade500) + 0.18 * ss * feStab + 0.18 * phaseStab + 0.16 * thermalAbuse + 0.20 * defectScore, 0, 1);
-  // Mn valence from charge balance: Na + Mn*v_Mn + Fe*3 + dop*v_dop = 4 (for AMO2)
-  var dopCharge = (comp.al ? 0.04 * 3.0 : 0) + (comp.ti ? 0.03 * 4.0 : 0);
-  var mnOx = clamp((4.0 - comp.Na - comp.Fe * 3.0 - dopCharge) / Math.max(comp.Mn, 0.01), 3.0, 4.0);
-  var feOx = 3.0;
-  var totalCharge = comp.Na + comp.Mn * mnOx + comp.Fe * feOx + dopCharge;
-  var chargeBalanceRisk = clamp(Math.abs(totalCharge - 4.0) / 1.4, 0, 1);
-  var score = cfg.wCap * (q0 / 180) + cfg.wStab * stability + cfg.wFade * (1 - fade500) + cfg.wCost * Math.max(0, 1 - costKwh / 200) - 0.08 * chargeBalanceRisk;
-  return { Q0: q0, Q500: q0 * (1 - fade500), fade500: fade500, cycleLife: cycleLife, avgVoltage: avgVoltage, stability: stability, jtIndex: jtRisk, energyDensity: energyDensity, costKwh: costKwh, score: score, oxygenRisk: oxygenRisk, chargeRisk: chargeBalanceRisk };
+  var stability = clamp(0.24 * (1 - fade500) + 0.22 * phaseStab + 0.18 * defectScore + 0.14 * thermalAbuse + 0.12 * rateCap + 0.10 * (1 - chargeRisk), 0, 1);
+  var evidence = nearestMaterialEvidence(norm);
+  var confidence = clamp(0.84 - 0.22 * Math.min(evidence.distance, 1.5) - 0.28 * chargeRisk - 0.22 * norm.siteErrorAbs - 0.12 * oxygenRisk + 0.05, 0.18, 0.92);
+  var score = cfg.wCap * clamp(q0 / 180, 0, 1.25) + cfg.wStab * stability + cfg.wFade * (1 - fade500) + cfg.wCost * clamp(1 - costKwh / 220, 0, 1) - 0.10 * chargeRisk - 0.06 * norm.siteErrorAbs;
+  var phaseState = p2Risk > 0.62 ? "P2->O2 transition risk" : chargeRisk > 0.45 ? "charge-compensated defect phase" : phaseStab < 0.38 ? "mixed/impurity phase risk" : jtRisk > 0.38 ? "JT-distorted layered phase" : "P2 layered phase";
+  var curve = simulateMaterialRetention(fadeTerms, Math.max(1000, Math.min(2200, cycleLife * 1.25)));
+  return {
+    Q0: q0, Q500: q0 * (1 - fade500), fade500: fade500, cycleLife: cycleLife,
+    avgVoltage: avgVoltage, stability: stability, jtIndex: jtRisk, energyDensity: energyDensity,
+    costKwh: costKwh, score: score, oxygenRisk: oxygenRisk, chargeRisk: chargeRisk,
+    phaseStability: phaseStab, phaseState: phaseState, ehull: ehull, p2Risk: p2Risk,
+    mnOx: mnOx, mn3Fraction: mn3, siteError: norm.siteError, normalized: norm,
+    latticeSpacing: clamp(5.48 + 0.22 * na - 0.16 * p2Risk - 0.08 * norm.siteErrorAbs + 0.04 * phaseStabilization, 5.25, 5.82),
+    thermalOnset: thermalOnset, rateCapability: rateCap, defectScore: defectScore,
+    mixingRisk: mixingRisk, moistureRisk: moistureRisk, confidence: confidence, evidence: evidence,
+    mechanisms: fadeTerms, retentionCurve: curve,
+    radar: [
+      { label: "Capacity", value: clamp(q0 / 180, 0, 1) },
+      { label: "Phase", value: phaseStab },
+      { label: "Fade", value: 1 - fade500 },
+      { label: "Cost", value: clamp(1 - costKwh / 220, 0, 1) },
+      { label: "O2 Safe", value: 1 - oxygenRisk },
+      { label: "Charge", value: 1 - chargeRisk }
+    ]
+  };
+}
+
+function apiMaterialToProp(pred) {
+  pred = pred || {};
+  var curve = pred.retention_curve || {};
+  return {
+    Q0: Number(pred.capacity),
+    Q500: Number(pred.capacity_500),
+    fade500: Number(pred.fade_500),
+    cycleLife: Number(pred.cycle_life),
+    avgVoltage: Number(pred.voltage),
+    stability: Number(pred.stability),
+    jtIndex: Number(pred.jt_index),
+    energyDensity: Number(pred.energy_density),
+    costKwh: Number(pred.cost_usd_kwh),
+    score: Number(pred.score),
+    oxygenRisk: Number(pred.oxygen_risk),
+    chargeRisk: Number(pred.charge_balance_risk),
+    phaseStability: Number(pred.phase_stability),
+    phaseState: pred.phase_state || "screened phase",
+    ehull: Number(pred.ehull_ev_atom),
+    p2Risk: Number(pred.p2_o2_risk),
+    mnOx: Number(pred.mn_oxidation_state),
+    mn3Fraction: Number(pred.mn3_fraction),
+    siteError: Number(pred.site_balance_error),
+    normalized: pred.normalized_composition,
+    latticeSpacing: Number(pred.lattice_spacing_A),
+    thermalOnset: Number(pred.thermal_onset_C),
+    rateCapability: Number(pred.rate_capability),
+    defectScore: Number(pred.defect_score),
+    mixingRisk: Number(pred.tm_mixing_risk),
+    moistureRisk: Number(pred.moisture_risk),
+    confidence: Number(pred.confidence),
+    evidence: pred.evidence,
+    mechanisms: pred.mechanisms,
+    retentionCurve: { cycles: curve.cycles || [], retention: curve.retention || [], lo: curve.lo || [], hi: curve.hi || [], knee_cycle: curve.knee_cycle, eol80_cycle: curve.eol80_cycle },
+    radar: pred.radar || []
+  };
+}
+
+function apiCompositionToUi(comp) {
+  comp = comp || {};
+  return {
+    Na: Number(comp.Na != null ? comp.Na : comp.na),
+    Mn: Number(comp.Mn != null ? comp.Mn : comp.mn),
+    Fe: Number(comp.Fe != null ? comp.Fe : comp.fe),
+    al: !!(comp.al || comp.al_doped),
+    ti: !!(comp.ti || comp.ti_doped)
+  };
 }
 
 function generateCandidates(selected, cfg) {
   var pts = [];
-  for (var na = 0.84; na <= 1.12; na += 0.04) {
-    for (var mn = 0.20; mn <= 0.82; mn += 0.04) {
-      var fe = clamp(1.0 - mn - ((selected.al ? 0.04 : 0) + (selected.ti ? 0.03 : 0)), 0.12, 0.82);
-      ["none", "al", "ti"].forEach(function (d) {
-        var comp = { Na: na, Mn: mn, Fe: fe, al: d === "al", ti: d === "ti" };
+  for (var na = 0.62; na <= 1.10; na += 0.04) {
+    for (var mn = 0.20; mn <= 0.80; mn += 0.04) {
+      ["none", "al", "ti", "al_ti"].forEach(function (d) {
+        var al = d === "al" || d === "al_ti";
+        var ti = d === "ti" || d === "al_ti";
+        var dop = (al ? MATERIAL_DOPANTS.Al.frac : 0) + (ti ? MATERIAL_DOPANTS.Ti.frac : 0);
+        var fe = clamp(1.0 - mn - dop, 0.06, 0.82);
+        var comp = { Na: na, Mn: mn, Fe: fe, al: al, ti: ti };
         var prop = scoreComposition(comp, 318.15, cfg);
         pts.push({ comp: comp, prop: prop });
       });
@@ -2165,15 +2358,15 @@ function drawLatticeSimulation(selected) {
   var W = cv.width, H = cv.height;
   ctx.clearRect(0, 0, W, H);
 
-  var na = selected.Na;
-  var mn = selected.Mn;
-  var fe = selected.Fe;
-  var al = selected.al;
-  var ti = selected.ti;
-
-  // Compute stability metrics
-  var jtDist = Math.max(0, mn - 0.48) * (ti ? 0.3 : 1.0);
-  var collapse = Math.max(0, 0.95 - na) * (al ? 0.2 : 1.0);
+  var props = selected.prop || scoreComposition(selected, 318.15, materialKnobs());
+  var norm = props.normalized && props.normalized.Na != null ? props.normalized : normalizeMaterialComposition(selected);
+  var na = Number(norm.Na != null ? norm.Na : selected.Na);
+  var mn = Number(norm.Mn != null ? norm.Mn : selected.Mn);
+  var dopants = norm.dopants || { Al: Number(norm.Al || 0), Ti: Number(norm.Ti || 0) };
+  var al = !!(selected.al || selected.al_doped || dopants.Al);
+  var ti = !!(selected.ti || selected.ti_doped || dopants.Ti);
+  var jtDist = clamp(Number(props.jtIndex) || 0, 0, 1);
+  var collapse = clamp((Number(props.p2Risk) || 0) * 0.72 + Math.max(0, 0.72 - na) * 0.35, 0, 1);
 
   // Background grid
   ctx.strokeStyle = "rgba(255,255,255,0.03)";
@@ -2184,6 +2377,14 @@ function drawLatticeSimulation(selected) {
 
   var cols = 8;
   var dx = W / (cols + 1);
+  function siteType(c, layerOffset) {
+    var alFrac = Number(dopants.Al || 0);
+    var tiFrac = Number(dopants.Ti || 0);
+    var r = (((c + 1) * 37 + layerOffset * 19) % 100) / 100;
+    if (al && r < alFrac) return "Al";
+    if (ti && r < alFrac + tiFrac) return "Ti";
+    return r < alFrac + tiFrac + mn ? "Mn" : "Fe";
+  }
 
   // Draw bonds (Background bonds first)
   ctx.strokeStyle = "rgba(255,255,255,0.12)";
@@ -2193,7 +2394,7 @@ function drawLatticeSimulation(selected) {
     var yTop = 35 + collapse * 15;
     var yBot = 115 - collapse * 15;
     
-    // Lattice distortion offset
+    // Lattice distortion offset, scaled from the charge-balance JT index.
     var jitterTop = (Math.sin(c * 2) * jtDist * 8);
     var jitterBot = (Math.cos(c * 2) * jtDist * 8);
 
@@ -2227,21 +2428,14 @@ function drawLatticeSimulation(selected) {
     var jitterTop = (Math.sin(c * 2) * jtDist * 8);
     var jitterBot = (Math.cos(c * 2) * jtDist * 8);
 
-    var topType = "Mn";
-    if (c % 2 === 1) topType = "Fe";
-    if (al && c === 2) topType = "Al";
-    if (ti && c === 5) topType = "Ti";
-
-    var botType = "Fe";
-    if (c % 2 === 1) botType = "Mn";
-    if (al && c === 6) botType = "Al";
-    if (ti && c === 1) botType = "Ti";
+    var topType = siteType(c, 0);
+    var botType = siteType(c, 1);
 
     drawAtom(ctx, x, yTop + jitterTop, topType);
     drawAtom(ctx, x, yBot + jitterBot, botType);
 
     // Sodium Ions in the gallery
-    var showNa = (c / cols) < na;
+    var showNa = ((c + 0.5) / cols) < clamp(na, 0, 1.20) / 1.20;
     if (showNa) {
       var naY = (yTop + yBot) / 2 + (Math.sin(c * 5) * 2);
       drawAtom(ctx, x + dx/2, naY, "Na");
@@ -2258,21 +2452,19 @@ function drawLatticeSimulation(selected) {
   if (al) drawLegendAtom(ctx, legX + 200, legY, "Al", "Al (pillar)");
   if (ti) drawLegendAtom(ctx, legX + 280, legY, "Ti", "Ti (dopant)");
 
-  var phaseName = "P2 Layered Phase";
+  var phaseName = props.phaseState || "P2 layered phase";
   var phaseColor = "#22c55e";
-  if (collapse > 0.08) {
-    phaseName = "O2 Collapse (low Na)";
+  if ((props.p2Risk || 0) > 0.62 || collapse > 0.42) {
     phaseColor = "#ff1a1a";
-  } else if (jtDist > 0.08) {
-    phaseName = "JT Jahn-Teller Distortion";
+  } else if ((props.chargeRisk || 0) > 0.35 || jtDist > 0.30) {
     phaseColor = "#ff9f1a";
   }
 
-  var naGalleryPct = Math.round(clamp(na, 0, 1.2) / 1.2 * 100);
   setReadouts("lattice-readout", [
-    { k: "Lattice Spacing", v: (5.62 - collapse * 0.45).toFixed(2) + " Å" },
+    { k: "Lattice Spacing", v: fmt(props.latticeSpacing || (5.62 - collapse * 0.45), 2) + " A" },
     { k: "Structure Phase", v: '<span style="color:' + phaseColor + ';font-weight:700">' + phaseName + '</span>', html: true },
-    { k: "Na Gallery", v: naGalleryPct + "% occupied" }
+    { k: "Mn valence", v: fmt(props.mnOx, 2) + "+ / Mn3 " + fmt((props.mn3Fraction || 0) * 100, 0) + "%" },
+    { k: "Site balance", v: fmt((props.siteError || 0) * 100, 1) + "% vs TM=1" }
   ]);
 }
 
@@ -2293,6 +2485,11 @@ function drawRadarChart(props) {
     { label: "O₂ Safety", value: clamp(1 - props.oxygenRisk, 0, 1) },
     { label: "Charge Bal.", value: clamp(1 - props.chargeRisk, 0, 1) }
   ];
+  if (Array.isArray(props.radar) && props.radar.length) {
+    axes = props.radar.map(function (r) {
+      return { label: String(r.label || ""), value: clamp(Number(r.value), 0, 1) };
+    });
+  }
   var n = axes.length;
   var angleStep = (2 * Math.PI) / n;
   // Draw grid rings
@@ -2358,6 +2555,42 @@ function drawRadarChart(props) {
 function drawCycleLifeCurve(props) {
   var cv = makeCanvas("cycle-life-chart");
   if (!cv) return;
+  var curve = props.retentionCurve || props.retention_curve;
+  if (curve && Array.isArray(curve.retention) && curve.retention.length > 2) {
+    var xMaxCurve = Array.isArray(curve.cycles) && curve.cycles.length ? curve.cycles[curve.cycles.length - 1] : curve.retention.length - 1;
+    drawMultiLine(cv, [
+      { name: "Capacity", values: curve.retention, color: "#22c55e", glow: true }
+    ], {
+      yMin: 0.5, yMax: 1.05, title: "Capacity retention from mechanism-resolved fade model",
+      xMax: xMaxCurve, yDigits: 2, legend: false,
+      band: curve.lo && curve.hi ? { lo: curve.lo, hi: curve.hi, color: "rgba(34,197,94,0.10)" } : null
+    });
+    var ctx0 = cv.getContext("2d");
+    var W0 = cv.width, H0 = cv.height;
+    var pad0 = { t: 28, r: 18, b: 34, l: 52 };
+    var pw0 = W0 - pad0.l - pad0.r, ph0 = H0 - pad0.t - pad0.b;
+    var y80a = pad0.t + ph0 - (0.8 - 0.5) / (1.05 - 0.5) * ph0;
+    ctx0.setLineDash([4, 4]);
+    ctx0.beginPath(); ctx0.moveTo(pad0.l, y80a); ctx0.lineTo(pad0.l + pw0, y80a);
+    ctx0.strokeStyle = "rgba(255,26,26,0.5)"; ctx0.stroke(); ctx0.setLineDash([]);
+    ctx0.fillStyle = "#ff1a1a"; ctx0.font = "9px JetBrains Mono, monospace"; ctx0.fillText("80% EOL", pad0.l + pw0 - 50, y80a - 4);
+    if (curve.knee_cycle != null && xMaxCurve > 0) {
+      var kx0 = pad0.l + clamp(curve.knee_cycle / xMaxCurve, 0, 1) * pw0;
+      ctx0.setLineDash([3, 3]); ctx0.beginPath(); ctx0.moveTo(kx0, pad0.t); ctx0.lineTo(kx0, pad0.t + ph0);
+      ctx0.strokeStyle = "rgba(234,179,8,0.4)"; ctx0.stroke(); ctx0.setLineDash([]);
+      ctx0.fillStyle = "#eab308"; ctx0.fillText("knee", kx0 + 4, pad0.t + 12);
+    }
+    var finalCap = curve.retention[curve.retention.length - 1];
+    var mechanisms = props.mechanisms || {};
+    var mech = Object.keys(mechanisms).map(function (k) { return [k, Number(mechanisms[k]) || 0]; }).sort(function (a, b) { return b[1] - a[1]; });
+    setReadouts("cycle-life-readout", [
+      { k: "Knee Point", v: curve.knee_cycle != null ? curve.knee_cycle + " cycles" : "not reached" },
+      { k: "EOL (80%)", v: curve.eol80_cycle != null ? curve.eol80_cycle + " cycles" : ">" + xMaxCurve + " cycles" },
+      { k: "Fade@500", v: (100 * props.fade500).toFixed(1) + "%" },
+      { k: "Driver", v: mech.length ? mech[0][0].replace(/_/g, " ") : "mixed" }
+    ]);
+    return;
+  }
   var stab = clamp(props.stability || 0.5, 0, 1);
   var fade = clamp(props.fade500 || 0.15, 0, 1);
   var jtIdx = clamp(props.jtIndex || 0.5, 0, 1);
@@ -2436,7 +2669,7 @@ function updateMat() {
   drawLatticeSimulation(selected);
 }
 
-function runScreening() {
+async function runScreening() {
   var cfg = materialKnobs();
   var selected = {
     Na: parseFloat(document.getElementById("na-slider").value),
@@ -2445,11 +2678,45 @@ function runScreening() {
     al: document.getElementById("sw-al").checked,
     ti: document.getElementById("sw-ti").checked
   };
-  var selectedProp = scoreComposition(selected, 318.15, cfg);
-  var items = generateCandidates(selected, cfg);
+  setHtml("mat-decision", "<strong>Screening:</strong> computing charge balance, phase stability, fade mechanisms, and local evidence distance...");
+  var selectedProp = null;
+  var items = null;
+  var apiSource = "browser fallback";
+  try {
+    var res = await fetch("/api/screen/cathode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        na: selected.Na,
+        mn: selected.Mn,
+        fe: selected.Fe,
+        al_doped: selected.al,
+        ti_doped: selected.ti,
+        temperature_K: 318.15,
+        upper_voltage: cfg.upperV,
+        ehull_slope: cfg.ehullSlope,
+        w_capacity: cfg.wCap,
+        w_stability: cfg.wStab,
+        w_fade: cfg.wFade,
+        w_cost: cfg.wCost
+      })
+    });
+    if (!res.ok) throw new Error("screen endpoint returned " + res.status);
+    var data = await res.json();
+    selectedProp = apiMaterialToProp(data.predicted || {});
+    items = (data.candidates || []).map(function (it) {
+      return { comp: apiCompositionToUi(it.composition || {}), prop: apiMaterialToProp(it.properties || {}) };
+    });
+    apiSource = "API physics";
+  } catch (err) {
+    selectedProp = scoreComposition(selected, 318.15, cfg);
+    items = generateCandidates(selected, cfg);
+    showToast("Materials API unavailable; using browser physics fallback.", "info");
+    console.warn(err);
+  }
   items.push({ comp: selected, prop: selectedProp, selected: true });
   paretoMark(items);
-  drawLatticeSimulation(selected);
+  drawLatticeSimulation(Object.assign({}, selected, { prop: selectedProp }));
   drawRadarChart(selectedProp);
   drawCycleLifeCurve(selectedProp);
   document.getElementById("mat-cap").textContent = selectedProp.Q0.toFixed(0);
@@ -2457,6 +2724,10 @@ function runScreening() {
   document.getElementById("mat-stab").textContent = selectedProp.stability.toFixed(2);
   document.getElementById("mat-jt").textContent = selectedProp.jtIndex.toFixed(2);
   selectedProp.comp = selected;
+  selectedProp.candidates = items.slice(0, 48).map(function (it) {
+    return { composition: it.comp, score: it.prop.score, capacity: it.prop.Q0, stability: it.prop.stability, fade500: it.prop.fade500 };
+  });
+  selectedProp.apiSource = apiSource;
   window.__kfMaterials = selectedProp;
   var cv = makeCanvas("mat-chart");
   var pts = items.map(function (it) {
@@ -2471,15 +2742,16 @@ function runScreening() {
   }
   anim();
   drawCompositionLandscape(makeCanvas("mat-landscape-chart"), items, selected);
-  var synth = selectedProp.stability > 0.72 && selectedProp.fade500 < 0.16 && selectedProp.chargeRisk < 0.28;
+  var synth = selectedProp.stability > 0.72 && selectedProp.fade500 < 0.16 && selectedProp.chargeRisk < 0.28 && selectedProp.oxygenRisk < 0.46 && Math.abs(selectedProp.siteError || 0) < 0.12;
   var advice = synth
     ? "Good candidate for a small coin-cell synthesis queue, with XRD phase check before cycling."
-    : "Keep in simulation queue; improve stability/charge balance before spending lab synthesis effort.";
-  setHtml("mat-decision", "<strong>Screening output:</strong> score " + selectedProp.score.toFixed(3) + ", fade500 " + (100 * selectedProp.fade500).toFixed(1) + "%, oxygen risk " + selectedProp.oxygenRisk.toFixed(2) + ". <strong>Decision:</strong> " + advice + ' <button class="btn btn-ghost" style="margin-left:0.75rem" onclick="testMaterialInDiagnostics()">Test in Diagnostics &rarr;</button>');
+    : "Keep in simulation queue; correct site balance, charge state, or phase risk before spending lab synthesis effort.";
+  var evidenceText = selectedProp.evidence && selectedProp.evidence.nearest_formula ? ", nearest evidence " + escapeHtml(selectedProp.evidence.nearest_formula) : "";
+  setHtml("mat-decision", "<strong>Screening output:</strong> score " + selectedProp.score.toFixed(3) + ", phase " + escapeHtml(selectedProp.phaseState || "screened") + ", fade500 " + (100 * selectedProp.fade500).toFixed(1) + "%, confidence " + fmt(selectedProp.confidence, 2) + evidenceText + ". <strong>Decision:</strong> " + advice + ' <button class="btn btn-ghost" style="margin-left:0.75rem" onclick="testMaterialInDiagnostics()">Test in Diagnostics &rarr;</button>');
   setReadouts("mat-risk-readout", [
     { k: "Objective", v: selectedProp.score.toFixed(3) },
-    { k: "Fade@500", v: (100 * selectedProp.fade500).toFixed(1) + "%" },
-    { k: "Oxygen risk", v: selectedProp.oxygenRisk.toFixed(2) },
+    { k: "Phase risk", v: fmt(selectedProp.p2Risk, 2) },
+    { k: "Site error", v: fmt((selectedProp.siteError || 0) * 100, 1) + "%" },
     { k: "Cost proxy", v: "$" + selectedProp.costKwh.toFixed(0) + "/kWh" }
   ]);
   var matConf = computeMaterialsConfidence(selectedProp);
@@ -3328,9 +3600,11 @@ function computeMaterialsConfidence(mat) {
     + outsidePenalty(Number(comp.Fe), 0.12, 0.82, 0.08);
   var propertyPenalty = outsidePenalty(q0, 95, 210, 0.10) + outsidePenalty(v, 2.8, 4.3, 0.08);
   var quality = 0.36 * stab + 0.20 * (1 - fade500) + 0.22 * (1 - oxygenRisk) + 0.22 * (1 - chargeRisk);
-  var conf = 0.30 + 0.52 * quality - compPenalty - propertyPenalty;
-  conf = clamp(conf, 0.18, 0.86);
-  var detail = "Stability " + stab.toFixed(2) + ", fade500 " + (fade500 * 100).toFixed(1) + "%, oxygen risk " + oxygenRisk.toFixed(2) + ", charge risk " + chargeRisk.toFixed(2) + ".";
+  var modelConf = Number.isFinite(Number(mat.confidence)) ? Number(mat.confidence) : null;
+  var conf = modelConf != null ? modelConf : (0.30 + 0.52 * quality - compPenalty - propertyPenalty);
+  conf = clamp(conf, 0.18, 0.92);
+  var ev = mat.evidence && mat.evidence.nearest_formula ? " Nearest evidence: " + mat.evidence.nearest_formula + "." : "";
+  var detail = "Stability " + stab.toFixed(2) + ", fade500 " + (fade500 * 100).toFixed(1) + "%, phase " + (mat.phaseState || "screened") + ", site error " + fmt((mat.siteError || 0) * 100, 1) + "%." + ev;
   return { confidence: conf, detail: detail };
 }
 
@@ -3376,31 +3650,43 @@ function computeUploadConfidence(byod) {
 }
 
 // ── Ragone Plot (Energy vs Power density) ──────────────────────────────
+function currentMaterialForAnalytics() {
+  var selected = {
+    Na: num("na-slider", 1.0),
+    Mn: num("mn-slider", 0.5),
+    Fe: num("fe-slider", 0.5),
+    al: !!(document.getElementById("sw-al") && document.getElementById("sw-al").checked),
+    ti: !!(document.getElementById("sw-ti") && document.getElementById("sw-ti").checked)
+  };
+  var mat = window.__kfMaterials;
+  if (mat && mat.comp && Math.abs(Number(mat.comp.Na) - selected.Na) < 1e-6 && Math.abs(Number(mat.comp.Mn) - selected.Mn) < 1e-6 && Math.abs(Number(mat.comp.Fe) - selected.Fe) < 1e-6 && !!mat.comp.al === selected.al && !!mat.comp.ti === selected.ti) {
+    return mat;
+  }
+  var prop = scoreComposition(selected, 318.15, materialKnobs());
+  prop.comp = selected;
+  return prop;
+}
+
 function runRagone() {
-  var na = num("na-slider", 1.0);
-  var mn = num("mn-slider", 0.5);
-  var fe = num("fe-slider", 0.5);
+  var mat = currentMaterialForAnalytics();
   var maxCr = num("ragone-max-cr", 5.0);
   var cellMassG = num("ragone-cell-mass", 120);
   var pts = [];
-  for (var cr = 0.1; cr <= maxCr; cr += (maxCr / 30)) {
-    var q0 = (120 + 40 * mn - 20 * fe) * (1 - 0.5 * Math.abs(na - 1.0));
-    var ratePenalty = 1 / (1 + 0.12 * Math.pow(cr, 1.4));
-    var qEff = q0 * ratePenalty;
-    var feW = fe / Math.max(mn + fe, 0.01);
-    var mnW = mn / Math.max(mn + fe, 0.01);
-    var vAvg = mnW * 3.75 + feW * 3.20 + 0.15 * (1.0 - na);
-    var vDrop = 0.08 * cr;
-    var vEff = Math.max(2.0, vAvg - vDrop);
+  var rateCap = clamp(Number(mat.rateCapability) || 0.55, 0.05, 1.0);
+  var oxygenRisk = clamp(Number(mat.oxygenRisk) || 0, 0, 1);
+  var step = Math.max(0.05, maxCr / 36);
+  for (var cr = 0.1; cr <= maxCr + 1e-9; cr += step) {
+    var ratePenalty = 1 / (1 + Math.pow(cr / Math.max(0.25, 2.2 * rateCap), 1.35));
+    var thermalDerate = clamp(1 - 0.08 * oxygenRisk * (cr / Math.max(1, maxCr)), 0.72, 1);
+    var qEff = Math.max(0, mat.Q0) * ratePenalty * thermalDerate;
+    var vEff = Math.max(2.0, mat.avgVoltage - 0.035 * cr / Math.max(0.08, rateCap));
     var energy = qEff * vEff;
-    var power = qEff * cr * vEff;
-    pts.push({ cRate: cr, energy: energy, power: power });
+    var power = energy * cr;
+    pts.push({ cRate: cr, energy: energy, power: power, rate_capability: rateCap, voltage: vEff });
   }
   window.__kfRagone = pts;
   var cv = makeCanvas("ragone-chart");
-  if (cv) {
-    drawRagonePlot(cv, pts);
-  }
+  if (cv) drawRagonePlot(cv, pts);
   var best = pts.reduce(function (a, b) { return a.energy > b.energy ? a : b; });
   var peakPower = pts.reduce(function (a, b) { return a.power > b.power ? a : b; });
   var cellEnergyWh = best.energy * cellMassG / 1000;
@@ -3408,9 +3694,9 @@ function runRagone() {
     { k: "Peak Energy", v: best.energy.toFixed(1) + " Wh/kg" },
     { k: "Cell Energy", v: cellEnergyWh.toFixed(2) + " Wh" },
     { k: "Peak Power", v: peakPower.power.toFixed(1) + " W/kg" },
-    { k: "Cell Peak Pwr", v: (peakPower.power * cellMassG / 1000).toFixed(1) + " W" }
+    { k: "Rate limit", v: rateCap.toFixed(2) }
   ]);
-  showToast("Ragone plot computed up to " + maxCr.toFixed(1) + "C.", "ok");
+  showToast("Ragone plot computed from current material physics up to " + maxCr.toFixed(1) + "C.", "ok");
 }
 
 function drawRagonePlot(cv, pts) {
@@ -3482,17 +3768,18 @@ function exportRagoneCSV() {
 
 // ── Vehicle Range Estimator ────────────────────────────────────────────
 function runRangeEstimate() {
-  var soh = num("range-soh", 1.0);
-  var energyWhKg = num("range-energy", 250);
-  var packKg = num("range-pack-kg", 495);
-  var effKwhPer100km = num("range-eff", 15);
+  var soh = clamp(num("range-soh", 1.0), 0.5, 1.05);
+  var energyWhKg = Math.max(1, num("range-energy", 250));
+  var packKg = Math.max(1, num("range-pack-kg", 495));
+  var effKwhPer100km = Math.max(1, num("range-eff", 15));
   var targetRangeKm = num("range-target", 600);
-  var motorKw = num("range-motor-kw", 150);
+  var motorKw = Math.max(1, num("range-motor-kw", 150));
+  var mat = currentMaterialForAnalytics();
+  var chemistryDerate = clamp(0.90 + 0.08 * (Number(mat.stability) || 0.5) - 0.06 * (Number(mat.oxygenRisk) || 0) - 0.05 * (Number(mat.chargeRisk) || 0), 0.65, 0.96);
 
-  // Sweep over SOH 0.5-1.0
   var pts = [];
   for (var s = 1.0; s >= 0.5; s -= 0.02) {
-    var usableKwh = s * energyWhKg * packKg / 1000;
+    var usableKwh = s * energyWhKg * packKg / 1000 * chemistryDerate;
     var rangeKm = usableKwh / effKwhPer100km * 100;
     pts.push({ soh: s, range_km: rangeKm, usable_kwh: usableKwh });
   }
@@ -3501,56 +3788,67 @@ function runRangeEstimate() {
   var cv = makeCanvas("range-chart");
   if (cv) {
     drawMultiLine(cv, [{ name: "range", values: pts.map(function (p) { return p.range_km; }), color: "#22c55e", glow: true }], {
-      yMin: 0, xMax: 100, title: "Estimated range (km) vs SOH degradation", yDigits: 0,
+      yMin: 0, xMax: 100, title: "Range vs SOH with material derating", yDigits: 0,
       points: [{ x: (1 - soh) / 0.5 * 100, y: current.range_km }], pointColor: "#ffffff"
     });
   }
   var rangeDiff = current.range_km - targetRangeKm;
-  var pwrToWt = motorKw / (packKg / 1000); // Specific power (kW/ton or W/g)
+  var specificPower = motorKw * 1000 / packKg;
+  // Power-limited acceleration estimate: F=ma, P=Fv => t(0-100) ~ 0.5*m*v^2/P
+  var vehicleMassKg = packKg + 1400; // pack + glider
+  var v100 = 100 / 3.6; // 100 km/h in m/s
+  var t0to100 = 0.5 * vehicleMassKg * v100 * v100 / (motorKw * 1000 * 0.85);
   setReadouts("range-readout", [
     { k: "Current Range", v: current.range_km.toFixed(1) + " km" },
     { k: "Usable kWh", v: current.usable_kwh.toFixed(1) + " kWh" },
     { k: "vs Target", v: (rangeDiff >= 0 ? "+" : "") + rangeDiff.toFixed(0) + " km" },
-    { k: "Specific Power", v: pwrToWt.toFixed(1) + " W/g" }
+    { k: "Specific Power", v: specificPower.toFixed(0) + " W/kg" },
+    { k: "0-100 km/h", v: t0to100.toFixed(1) + " s (est)" },
+    { k: "Chemistry Derate", v: (chemistryDerate * 100).toFixed(0) + "%" }
   ]);
   showToast("Range: " + current.range_km.toFixed(0) + " km vs target " + targetRangeKm + " km.", "ok");
 }
 
 // ── Electrolyte Recommendation ─────────────────────────────────────────
 function runElectrolyteRecommend() {
-  var na = num("na-slider", 1.0);
-  var mn = num("mn-slider", 0.5);
-  var fe = num("fe-slider", 0.5);
+  var mat = currentMaterialForAnalytics();
+  var comp = mat.comp || {};
   var el = document.getElementById("electrolyte-result");
   if (!el) return;
-  // Local rule engine (mirrors backend)
   var electrolyte, additives, rationale;
-  if (na >= 1.0 && mn >= 0.5) {
-    electrolyte = "Carbonate (EC/EMC) with 1.0 M NaPF₆";
-    additives = ["FEC (2 wt%)", "VC (1 wt%)"];
-    rationale = "High-Na P2 layered oxide with significant Mn — carbonate electrolyte with fluorinated additive for stable CEI formation.";
-  } else if (fe > mn) {
-    electrolyte = "Ether-based (DEGDME) with 1.0 M NaTFSI";
-    additives = ["Fluoroethylene carbonate (3 wt%)"];
-    rationale = "Fe-rich cathode benefits from ether solvation shell — better Na+ desolvation kinetics at the Fe³⁺/²⁺ redox couple.";
-  } else if (na < 0.9) {
-    electrolyte = "Concentrated (3.5 M) NaFSI in DME";
-    additives = ["No additional additives needed"];
-    rationale = "Na-deficient cathode is moisture-sensitive — concentrated electrolyte reduces free solvent and parasitic water reaction.";
+  if ((mat.oxygenRisk || 0) > 0.55 || (mat.p2Risk || 0) > 0.55) {
+    electrolyte = "High-concentration NaFSI in DME/TMP blend";
+    additives = ["1-2 wt% FEC", "dry handling below 20 ppm H2O"];
+    rationale = "High phase or oxygen risk: reduce free-solvent activity and strengthen the oxidative CEI before cycling near the upper cutoff.";
+  } else if ((mat.jtIndex || 0) > 0.35) {
+    electrolyte = "Carbonate EC/EMC with 1.0 M NaPF6";
+    var jt_additives = ["2 wt% FEC", "1 wt% VC"];
+    if (comp.ti || comp.ti_doped) jt_additives.push("Reduced FEC (Ti lowers Na+ migration barrier)");
+    if (comp.al || comp.al_doped) jt_additives.push("Mn scavenger screen (Al pillar stabilizes but Mn3+ still dissolves)");
+    else jt_additives.push("Mn scavenger screen");
+    additives = jt_additives;
+    rationale = "Mn3+-rich recipe: prioritize CEI quality and transition-metal dissolution control." + (comp.ti ? " Ti doping lowers Na+ desolvation energy — consider reduced FEC loading." : "");
+  } else if (Number(comp.Fe) > Number(comp.Mn)) {
+    electrolyte = "Glyme ether with 1.0 M NaTFSI";
+    additives = (comp.al || comp.al_doped) ? ["FEC confirmation screen", "No SN needed (Al pillar reduces lattice strain)"] : ["FEC confirmation screen"];
+    rationale = "Fe-rich lower-voltage recipe: ether solvation can reduce Na+ desolvation penalty and improve rate response.";
   } else {
-    electrolyte = "Carbonate (EC/PC, 1:1) with 1.0 M NaClO₄";
-    additives = ["FEC (5 wt%)", "Succinonitrile (1 wt%)"];
-    rationale = "Balanced Mn/Fe composition — standard carbonate with FEC for anode passivation and succinonitrile for oxidative stability.";
+    electrolyte = "Carbonate EC/PC with 1.0 M NaClO4 or NaPF6";
+    additives = ["3-5 wt% FEC", "1 wt% succinonitrile"];
+    if (comp.ti || comp.ti_doped) additives.push("Ti-doped: consider lower FEC loading (3 wt%)");
+    if (comp.al || comp.al_doped) additives.push("Al-doped: add PS additive for cathode CEI reinforcement");
+    rationale = "Balanced Mn/Fe layered oxide: carbonate baseline with FEC, then validate CEI stability at the selected upper cutoff.";
   }
+  var compatibility = clamp(0.82 - 0.30 * (mat.oxygenRisk || 0) - 0.18 * (mat.chargeRisk || 0) + 0.10 * (mat.rateCapability || 0.5), 0, 1);
   var html = '<div style="padding:0.5rem">';
-  html += '<div style="margin-bottom:0.5rem"><span style="color:#22c55e;font-weight:700">✓ Recommended Electrolyte</span></div>';
+  html += '<div style="margin-bottom:0.5rem"><span style="color:#22c55e;font-weight:700">Recommended Electrolyte</span></div>';
   html += '<div style="font-size:0.82rem;color:#e8e8e8;font-weight:600;margin-bottom:0.4rem">' + escapeHtml(electrolyte) + '</div>';
   html += '<div style="font-size:0.72rem;color:#aaa;margin-bottom:0.5rem"><strong>Additives:</strong> ' + additives.map(escapeHtml).join(", ") + '</div>';
-  html += '<div style="font-size:0.68rem;color:#666;border-left:2px solid #ff1a1a;padding-left:0.6rem">' + escapeHtml(rationale) + '</div>';
-  html += '<div style="margin-top:0.6rem;font-size:0.64rem;color:#555">Composition: Na=' + na.toFixed(2) + ' Mn=' + mn.toFixed(2) + ' Fe=' + fe.toFixed(2) + '</div>';
+  html += '<div style="font-size:0.68rem;color:#777;border-left:2px solid #ff1a1a;padding-left:0.6rem">' + escapeHtml(rationale) + '</div>';
+  html += '<div style="margin-top:0.6rem;font-size:0.64rem;color:#666">Compatibility ' + (compatibility * 100).toFixed(0) + '%, phase ' + escapeHtml(mat.phaseState || "screened") + '</div>';
   html += '</div>';
   el.innerHTML = html;
-  showToast("Electrolyte: " + electrolyte.split("with")[0].trim(), "ok");
+  showToast("Electrolyte: " + electrolyte.split(" with ")[0].trim(), "ok");
 }
 
 // ── Regional Climate Stress Profiles ───────────────────────────────────
@@ -3579,7 +3877,9 @@ function generateClimateProfile(regionKey, days) {
     var t = seed.meanT + seasonal + diurnal + offset;
     var monsoon = seed.monsoonAmp * Math.sin(2 * Math.PI * (day / 365 - 0.05));
     var rh = clamp(seed.meanRH + monsoon - 0.45 * diurnal, 8, 98);
-    var hs = 1 / (1 + Math.exp(-(t - 42) / 3.5)) * (1 + 0.004 * Math.max(rh - 60, 0)) * chargeStress;
+    // Humidity effect: high RH accelerates electrolyte water ingress and SEI instability
+    var humidityStress = clamp((rh - 60) / 100, 0, 0.4);
+    var hs = 1 / (1 + Math.exp(-(t - 42) / 3.5)) * (1 + 0.004 * Math.max(rh - 60, 0) + humidityStress * 0.12) * chargeStress;
     var cp = 1 / (1 + Math.exp((t - 2) / 3));
     temps.push(t);
     rhs.push(rh);

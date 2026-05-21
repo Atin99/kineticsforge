@@ -46,26 +46,26 @@
       cathode synthesis priority, and recycling recipe economics.
     </p>
     <div class="hero-operating">
-      <div><span>Diagnostics</span> SOH, knee point, and dominant loss terms from T, C-rate, cycle count, and editable kinetics.</div>
+      <div><span>Diagnostics</span> SOH, knee point, and dominant loss terms from T, C-rate, cycle count, and parameterizable kinetics.</div>
       <div><span>Upload</span> CSV/XLSX schema fingerprinting, tier-1 feature extraction, dQ/dV peaks, and exportable results.</div>
       <div><span>BMS</span> Battery Management System simulation: thermal propagation, EIS drift, risk, and action threshold.</div>
       <div><span>Materials</span> Na-ion cathode ranking by capacity, stability, fade, cost, and defect risk.</div>
     </div>
     <div class="hero-metrics">
       <div class="hero-metric">
-        <div class="val" id="counter-data">0</div>
-        <div class="lbl">Real Data Rows</div>
+        <div class="val" id="counter-data">5.1M</div>
+        <div class="lbl" title="BatteryLife Na-ion 371K cycling + NASA PCoE 2K impedance + ISU-ILCC 4.9M time-series + UL_PUR 185K summary = 5.09M across 555 cells and 5 datasets">Data Points (5 datasets)</div>
       </div>
       <div class="hero-metric">
-        <div class="val" id="counter-models">0</div>
-        <div class="lbl">Physics Surfaces</div>
+        <div class="val" id="counter-models">14</div>
+        <div class="lbl">Physics Models</div>
       </div>
       <div class="hero-metric">
-        <div class="val" id="counter-cells">0</div>
+        <div class="val" id="counter-cells">555</div>
         <div class="lbl">Battery Cells</div>
       </div>
       <div class="hero-metric">
-        <div class="val" id="counter-endpoints">0</div>
+        <div class="val" id="counter-endpoints">14</div>
         <div class="lbl">API Endpoints</div>
       </div>
     </div>
@@ -118,9 +118,9 @@
 
       <div class="formula-box">
         <div class="formula-title">Diagnostics Composition</div>
-        <code>Na_x(Mn,Fe)O2 controls SOC window, P2-O2 onset, JT strain, desolvation, and voltage fade.</code>
+        <code>Na_x(Mn,Fe,D)O2 controls SOC window, P2-O2 onset, JT strain, desolvation, and voltage fade.</code>
         <div class="knob-grid">
-          <label>Na <span id="diag-na-val">1.02</span><input class="mini-input" id="diag-na" type="number" value="1.02" min="0.60" max="1.20" step="0.02" oninput="updateDiag()"></label>
+          <label title="Na > 1.0 = superstoichiometric. Compensates grain-boundary Na loss during high-temperature calcination (standard synthesis practice for P2-type layered oxides).">Na <span id="diag-na-val">1.02</span><input class="mini-input" id="diag-na" type="number" value="1.02" min="0.60" max="1.20" step="0.02" oninput="updateDiag()"></label>
           <label>Mn <span id="diag-mn-val">0.52</span><input class="mini-input" id="diag-mn" type="number" value="0.52" min="0.05" max="0.95" step="0.02" oninput="updateDiag()"></label>
           <label>Fe <span id="diag-fe-val">0.43</span><input class="mini-input" id="diag-fe" type="number" value="0.43" min="0.05" max="0.95" step="0.02" oninput="updateDiag()"></label>
           <label>dopant <span id="diag-dop-val">0.050</span><input class="mini-input" id="diag-dop" type="number" value="0.05" min="0" max="0.25" step="0.01" oninput="updateDiag()"></label>
@@ -162,12 +162,13 @@
       </div>
 
       <div class="formula-box">
-        <div class="formula-title">Editable Degradation Equation</div>
-        <code>dQ/dN = -Q[ kSEI·sqrt(N/Nf) + 0.65·kP2·g(SOC,T,JT) + kJT·JT + kdes·ln(1+DNa) + kBV·eta² + r ]</code>
+        <div class="formula-title">Parameterizable Degradation ODE</div>
+        <code>dQ/dN = -Q[ kSEI·d(√N)/dN + kP2·g(SOC,T,JT) + kJT·JT(SOC) + kdes·ln(1+DNa) + kBV·η² + r ]</code>
+        <div class="formula-note" style="font-size:0.62rem;color:#666;margin-top:0.35rem">SEI uses parabolic kinetics d(√N)/dN = 1/(2√N) (Ploehn-Ramadass diffusion-limited model). P2-O2 branching ratio is absorbed into kP2. JT evolves with SOC: Mn³⁺ fraction peaks at low SOC. η is Butler-Volmer overpotential. r is a bounded residual (|r| ≤ 0.15·total_loss). All coefficients are tunable below.</div>
         <div class="knob-grid">
           <label>SEI scale<input class="mini-input" id="diag-k-sei" type="number" value="1.00" step="0.05"></label>
           <label>SEI Ea eV<input class="mini-input" id="diag-ea-sei" type="number" value="0.56" step="0.02"></label>
-          <label>P2 rate<input class="mini-input" id="diag-p2-k" type="number" value="0.0028" step="0.0001"></label>
+          <label title="P2-O2 branching ratio (0.65, Lu et al. 2023) is absorbed into this value">P2 rate<input class="mini-input" id="diag-p2-k" type="number" value="0.00182" step="0.0001"></label>
           <label>P2 SOC*<input class="mini-input" id="diag-p2-soc" type="number" value="0.78" step="0.01"></label>
           <label>JT scale<input class="mini-input" id="diag-jt-scale" type="number" value="1.00" step="0.05"></label>
           <label>BV scale<input class="mini-input" id="diag-bv-scale" type="number" value="1.00" step="0.05"></label>
@@ -180,8 +181,11 @@
         <div class="formula-title">Fit Experimental Capacity Data</div>
         <code>Rows: cycle, capacity fraction or percent. Fits SEI scale, P2 rate, JT scale, and C-rate stress for this session.</code>
         <textarea id="diag-cal-data" class="mini-input" style="width:100%;min-height:96px;margin-top:0.75rem" spellcheck="false">0,1.000
+50,0.962
 100,0.930
+200,0.882
 300,0.835
+400,0.794
 500,0.760</textarea>
         <div style="margin-top:0.75rem;display:flex;gap:0.75rem;flex-wrap:wrap">
           <button class="btn btn-ghost" onclick="calibrateDiagnostics()" type="button">Calibrate</button>
@@ -285,7 +289,7 @@
       <div class="panel">
         <div class="panel-title"><span class="indicator"></span> Tier-1 Features</div>
         <table class="tbl">
-          <thead><tr><th>Feature</th><th>Value</th><th>Mask</th></tr></thead>
+          <thead><tr><th>Feature</th><th>Value</th><th title="1 = feature present in upload, 0 = not available (imputed or skipped). Missing features reduce confidence.">Mask ℹ️</th></tr></thead>
           <tbody id="byod-feature-body"><tr><td colspan="3">No features extracted yet.</td></tr></tbody>
         </table>
       </div>
@@ -439,7 +443,7 @@
       </div>
 
       <div class="formula-box">
-        <div class="formula-title">Editable Pack Thermal/Risk Equation</div>
+        <div class="formula-title">Parameterizable Pack Thermal/Risk Equation</div>
         <code>Cth dTi/dt = I²Ri + Σ kij(Tj-Ti) - h(Ti-Ta); risk = f(T, dT/dt, Rct, RSEI, neighbor risk)</code>
         <div class="knob-grid">
           <label>Cth J/K<input class="mini-input" id="bms-cth" type="number" value="95" step="5"></label>
@@ -484,6 +488,7 @@
         </div>
       </div>
       <div class="decision-box" id="bms-decision">Run the pack simulation to get a cell-level action recommendation.</div>
+      <div class="plot-note" style="color:#d97706;font-size:0.68rem;margin-top:0.5rem;border-left:2px solid #d97706;padding-left:0.5rem">⚠ M5 Label Gate: Risk scores are physics-forward proxies from the thermal ODE and simulated EIS drift, not outputs of a validated classifier. Safety-performance claims require real pack telemetry labels. EIS features (Rct, RSEI) shown here are derived quantities, not measured impedance spectroscopy.</div>
       <div class="plot-note" id="bms-sweep-note">Run a seed sweep to quantify how sensitive this setup is to stochastic initialization.</div>
       <div id="bms-confidence"></div>
     </div>
@@ -533,23 +538,23 @@
 
       <div class="switch-row">
         <div class="switch-label">
-          <span class="name">Dopant: Al³⁺ Substitution</span>
-          <span class="desc">Aluminium doping stabilizes the layered structure by suppressing the P2→O2 phase transition. Al³⁺ occupies octahedral sites without participating in redox, acting as structural pillars during deep desodiation.</span>
+          <span class="name">Dopant: Al3+ Substitution</span>
+          <span class="desc">Aluminium doping stabilizes the layered structure by suppressing the P2-&gt;O2 phase transition. Al3+ occupies octahedral sites without participating in redox, acting as structural pillars during deep desodiation.</span>
         </div>
         <label class="switch"><input type="checkbox" id="sw-al" onchange="updateMat()"><span class="slider"></span></label>
       </div>
 
       <div class="switch-row">
         <div class="switch-label">
-          <span class="name">Dopant: Ti⁴⁺ Substitution</span>
-          <span class="desc">Titanium doping introduces a d⁰ cation that suppresses Jahn-Teller distortion by diluting the Mn³⁺ concentration. Also improves rate capability via reduced migration energy barriers for Na⁺ diffusion.</span>
+          <span class="name">Dopant: Ti4+ Substitution</span>
+          <span class="desc">Titanium doping introduces a d0 cation that suppresses Jahn-Teller distortion by diluting the Mn3+ concentration. It also improves rate capability through lower Na+ migration barriers.</span>
         </div>
         <label class="switch"><input type="checkbox" id="sw-ti" onchange="updateMat()"><span class="slider"></span></label>
       </div>
 
       <div class="formula-box">
-        <div class="formula-title">Editable Screening Objective</div>
-        <code>score = wcap·Q0 + wstab·stability + wfade·(1-fade500) - wcost·cost/kWh - charge/defect penalties</code>
+        <div class="formula-title">Parameterizable Screening Objective</div>
+        <code>score = wcap*Q0 + wstab*stability + wfade*(1-fade500) - wcost*cost/kWh - charge/defect penalties</code>
         <div class="knob-grid">
           <label>w capacity<input class="mini-input" id="mat-w-cap" type="number" value="0.32" step="0.02"></label>
           <label>w stability<input class="mini-input" id="mat-w-stab" type="number" value="0.32" step="0.02"></label>
@@ -610,11 +615,11 @@
 
       <div class="panel" style="margin-top:1rem">
         <div class="panel-title"><span class="indicator"></span> Crystal Lattice Phase Stability</div>
-        <div class="range-desc">Atomic layer simulation — Jahn-Teller distortion (high Mn³⁺) or lattice collapse (low Na⁺). Doping atoms glow as stabilization pillars. Na⁺ ions pulse in the gallery.</div>
+        <div class="range-desc">Composition-driven lattice schematic showing phase risk, Jahn-Teller distortion, site-balance error, and Na gallery occupancy. This is a parameterized visualization from the physics model, not a DFT or MD simulation.</div>
         <div class="lattice-container">
           <canvas id="lattice-canvas" width="500" height="220" style="width:100%; height:220px; display:block"></canvas>
         </div>
-        <div class="readout-grid" id="lattice-readout" style="grid-template-columns: repeat(3, 1fr)"></div>
+        <div class="readout-grid" id="lattice-readout" style="grid-template-columns: repeat(4, 1fr)"></div>
       </div>
 
       <div class="panel" style="margin-top:1rem">
@@ -688,7 +693,7 @@
       </div>
 
       <div class="formula-box">
-        <div class="formula-title">Editable Leaching Kinetics</div>
+        <div class="formula-title">Parameterizable Leaching Kinetics (Surface-Reaction Control)</div>
         <code>1 - (1-X)^(1/3) = k0·Cacid^n·exp[-Ea/R(1/T-1/Tref)]·(50/Rp)^m·t</code>
         <div class="knob-grid">
           <label>leach min<input class="mini-input" id="rec-time" type="number" value="120" step="5"></label>
@@ -762,7 +767,7 @@
     <div>
       <div class="panel" style="margin-bottom:1rem">
         <div class="panel-title"><span class="indicator"></span> Vehicle Range Estimator</div>
-        <div class="range-desc">Estimate driving range from current SOH, energy density, and vehicle efficiency (WLTP baseline).</div>
+        <div class="range-desc">Estimate driving range from current SOH, energy density, and vehicle efficiency (WLTP baseline). Motor power limits peak specific power (W/kg); range is energy-limited, acceleration is power-limited.</div>
         <div class="knob-grid" style="margin-bottom:0.75rem">
           <label>SOH <input class="mini-input" id="range-soh" type="number" value="1.0" min="0.5" max="1.0" step="0.01"></label>
           <label>Energy Wh/kg <input class="mini-input" id="range-energy" type="number" value="250" min="50" max="600" step="10"></label>
