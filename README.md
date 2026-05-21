@@ -1,3 +1,13 @@
+---
+title: KineticsForge
+emoji: 🔋
+colorFrom: red
+colorTo: slate
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # KineticsForge
 
 A battery engineering workbench I built for Na-ion cells. The whole idea behind this is pretty simple actually - instead of giving you some final answer about your battery, it helps you figure out what experiment to run next. You plug in your cathode composition, cycling conditions, or pack layout, and it tells you which degradation mechanism is probably winning, which cell in your pack looks sketchy, whether a cathode recipe is even worth synthesizing, and if your recycling batch will actually make money.
