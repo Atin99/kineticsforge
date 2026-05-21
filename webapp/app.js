@@ -1,4 +1,5 @@
 var activeBmsRun = 0;
+var bmsPresetFromDiagnostics = null;
 var kfAssistantHistory = [];
 var KF_HISTORY_KEY = "kineticsforge.runHistory.v1";
 var kfRunHistory = loadRunHistory();
@@ -174,7 +175,11 @@ function setNavHealth(state, label) {
 
 function updateNavHealth() {
   setNavHealth("warn", "CHECKING");
-  fetch("/health", { cache: "no-store" })
+  var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  var timer = setTimeout(function () {
+    if (ctrl) ctrl.abort();
+  }, 4500);
+  fetch("/health", { cache: "no-store", signal: ctrl ? ctrl.signal : undefined })
     .then(function (res) {
       if (!res.ok) throw new Error("health " + res.status);
       return res.json();
@@ -183,8 +188,15 @@ function updateNavHealth() {
       var ok = data && (data.status === "ok" || data.status === "operational");
       setNavHealth(ok ? "ok" : "warn", ok ? "READY" : "WAKING");
     })
-    .catch(function () {
+    .catch(function (err) {
+      if (err && err.name === "AbortError") {
+        setNavHealth("warn", "DEGRADED");
+        return;
+      }
       setNavHealth("bad", "OFFLINE");
+    })
+    .finally(function () {
+      clearTimeout(timer);
     });
 }
 
@@ -242,6 +254,65 @@ function severityTag(level) {
   return '<span class="tag">Info</span>';
 }
 
+var HARDPOINT_MAP = {
+  M1_CathodeUDE: {
+    hardpoint: "Na-ion ODE terms (SEI/P2/JT/desolv/BV) + bounded residual gate",
+    fallback: "Physics mirror only; checkpoint probe disabled."
+  },
+  M2_SOH: {
+    hardpoint: "Capacity-window trend and operating-condition projection",
+    fallback: "Capacity passthrough/rule estimate."
+  },
+  M3_CycleLife: {
+    hardpoint: "Early-cycle class boundaries from fade and CE",
+    fallback: "Rules bucket (<500, 500-1000, 1000-1500, >1500)."
+  },
+  M4_FadeRate: {
+    hardpoint: "Linear early-cycle fade slope",
+    fallback: "Rule slope from extracted cycle summaries."
+  },
+  M5_BMS_TGN: {
+    hardpoint: "Thermal graph ODE + EIS-derived risk + temporal neighbor memory",
+    fallback: "Physics-forward label-gate proxy."
+  },
+  M6_RUL: {
+    hardpoint: "Cycle-to-80% projection",
+    fallback: "Rule extrapolation from observed fade."
+  },
+  M7_Anomaly: {
+    hardpoint: "Residual/variance anomaly proxy",
+    fallback: "Feature-mask plus signal-shape heuristic."
+  },
+  M8_Joint_SOH_RUL: {
+    hardpoint: "Joint fusion of SOH, RUL, and fade",
+    fallback: "Rule fusion from M2/M4/M6 estimates."
+  },
+  M9_KneeDetect: {
+    hardpoint: "Capacity curvature/knee detector",
+    fallback: "Second-derivative knee proxy."
+  },
+  M10_ChemRank: {
+    hardpoint: "Chemistry rank score from dQ/dV + feature priors",
+    fallback: "Rule-based chemistry ranking."
+  },
+  M11_ElectrolyteHealth: {
+    hardpoint: "EIS/plating compatibility head",
+    fallback: "Tier-1 heuristic (degradation + plating risk)."
+  },
+  M12_Replenishability: {
+    hardpoint: "Recovery probability and expected gain",
+    fallback: "Preview heuristic (research only)."
+  },
+  M13_ChemIdentifier: {
+    hardpoint: "Chem family from dQ/dV and voltage windows",
+    fallback: "Rule classification with confidence cap."
+  },
+  M14_FormationProtocol: {
+    hardpoint: "Formation life/robustness/SEI quality head",
+    fallback: "Preview rule output; validate experimentally."
+  }
+};
+
 function addDecision(items, item) {
   items.push(Object.assign({
     severity: "info",
@@ -278,18 +349,32 @@ function buildDecisionItems() {
     var totalLoss = diag.sei[diag.sei.length - 1] + diag.p2[diag.p2.length - 1] + diag.jt[diag.jt.length - 1] + diag.rate[diag.rate.length - 1] + residual;
     var residualFrac = totalLoss > 1e-9 ? residual / totalLoss : 0;
     var sev = eol < 0.80 ? "critical" : (fade > 12 || residualFrac > 0.30 ? "warn" : "ok");
-    var action = eol < 0.80
-      ? "Do not advance this operating point without a lower-stress validation run."
-      : residualFrac > 0.30
-        ? "Calibrate the residual channel against measured cycle-capacity rows."
-        : "Use this as the baseline degradation case for the next comparison.";
+    var action = "Use this as the baseline degradation case for the next comparison.";
+    var next = "Cycle 3 replicate cells at " + num("temp-slider", 45).toFixed(0) + " C and " + num("crate-slider", 1).toFixed(1) + "C; compare measured fade to the exported curve.";
+    var cycleCap = parseInt(document.getElementById("cycles-slider").value, 10) || 500;
+    if (eol < 0.80) {
+      action = "[D-GATE-01] Halt this operating point and rerun at <=0.7C and <=35 C before cycle " + Math.min(350, Math.round(cycleCap * 0.7)) + ".";
+      next = "Run one lower-stress replicate immediately and verify whether the dominant term changes.";
+    } else if (residualFrac > 0.30) {
+      action = "[D-CAL-02] Residual channel is too large; recalibrate against measured cycle-capacity rows before claiming mechanism attribution.";
+      next = "Add at least 7 measured cycle-capacity points and rerun calibration; require RMSE <= 0.02.";
+    } else if (top[0] === "SEI/desolvation" && conf >= 0.70) {
+      action = "[D-SEI-03] Prioritize electrolyte/additive screening and lower-temperature charge protocol.";
+      next = "Run additive A/B at fixed chemistry and compare CE drift + capacity fade over first 200 cycles.";
+    } else if (top[0] === "P2-O2" && conf >= 0.70) {
+      action = "[D-P2-04] Reduce upper cutoff voltage and/or increase Al/Ti stabilization before full cycling.";
+      next = "Test upper-V reduction by 0.10 V and compare P2 contribution at cycle 300.";
+    } else if (top[0] === "rate stress" && conf >= 0.65) {
+      action = "[D-RATE-05] Reduce C-rate immediately; current profile is power-stress limited.";
+      next = "Rerun at 0.7C and 1.0C to map rate sensitivity with the same composition.";
+    }
     addDecision(items, {
       severity: sev,
       source: "Diagnostics",
       owner: "Cell R&D",
       evidence: "EOL " + eol.toFixed(3) + ", fade " + fade.toFixed(1) + "%, dominant " + top[0],
       action: action,
-      next: "Cycle 3 replicate cells at " + num("temp-slider", 45).toFixed(0) + " C and " + num("crate-slider", 1).toFixed(1) + "C; compare measured fade to the exported curve.",
+      next: next,
       confidence: conf,
       confidence_detail: diagConf.detail
     });
@@ -304,14 +389,21 @@ function buildDecisionItems() {
     var gate = bms.threshold || 0.42;
     var bmsConf = computeBmsConfidence(bms, frame);
     var bmsSev = risk >= gate ? "critical" : risk >= gate * 0.80 ? "warn" : "ok";
+    var bmsAction = risk >= gate
+      ? "[B-ALERT-01] Cool or isolate C" + frame.maxCell + " first; inspect Rct/RSEI rise before assuming pack-wide failure."
+      : "Keep monitoring; this run stays below the configured action gate.";
+    if (risk >= gate && Number.isFinite(frame.rcts[frame.maxCell]) && Number.isFinite(frame.rseis[frame.maxCell])) {
+      var eisSum = frame.rcts[frame.maxCell] + frame.rseis[frame.maxCell];
+      if (eisSum > 0.060) {
+        bmsAction = "[B-EIS-02] C" + frame.maxCell + " crossed risk gate with high impedance drift; isolate cell and trigger impedance check.";
+      }
+    }
     addDecision(items, {
       severity: bmsSev,
       source: "BMS",
       owner: "Pack Safety",
       evidence: "C" + frame.maxCell + " risk " + risk.toFixed(3) + " / gate " + gate.toFixed(2) + ", Tmax " + tmax.toFixed(1) + " C, seed " + (bms.seed == null ? "--" : bms.seed),
-      action: risk >= gate
-        ? "Cool or isolate C" + frame.maxCell + " first; inspect impedance rise before assuming pack-wide failure."
-        : "Keep monitoring; this run stays below the configured action gate.",
+      action: bmsAction,
       next: "Repeat the run across 5 seeds and one lower threshold to estimate false-negative sensitivity before pack policy changes.",
       confidence: bmsConf.confidence,
       confidence_detail: bmsConf.detail
@@ -541,12 +633,12 @@ function setControlValue(id, value) {
 function sessionSnapshot() {
   var ids = [
     "temp-slider", "crate-slider", "cycles-slider", "diag-na", "diag-mn", "diag-fe", "diag-dop", "diag-dopant-type",
-    "diag-k-sei", "diag-ea-sei", "diag-p2-k", "diag-p2-soc", "diag-jt-scale", "diag-bv-scale", "diag-stress-exp", "diag-residual-scale",
+    "diag-k-sei", "diag-ea-sei", "diag-p2-k", "diag-ea-p2", "diag-p2-soc", "diag-jt-scale", "diag-jt-coupling", "diag-bv-scale", "diag-stress-exp", "diag-residual-scale",
     "sw-p2o2", "sw-jt", "sw-sei", "sw-neural",
-    "pack-slider", "dur-slider", "bms-topology", "bms-format", "bms-ambient", "bms-cth", "bms-kedge", "bms-cooling", "bms-load", "bms-rct-gate", "bms-risk-thresh", "bms-loss-ratio", "bms-seed", "sw-fault", "sw-eis", "sw-asym",
+    "pack-slider", "dur-slider", "bms-topology", "bms-format", "bms-ambient", "bms-cth", "bms-kedge", "bms-cool", "bms-load", "bms-rct-gate", "bms-risk-thresh", "bms-loss-ratio", "bms-seed", "sw-fault", "sw-eis", "sw-asym",
     "na-slider", "mn-slider", "fe-slider", "sw-al", "sw-ti", "mat-w-cap", "mat-w-stab", "mat-w-fade", "mat-w-cost", "mat-upper-v", "mat-ehull-slope", "mat-charge-penalty", "mat-defect-penalty",
-    "mass-slider", "acid-slider", "leach-slider", "rec-time", "rec-particle", "rec-acid-order", "rec-mn-ea", "rec-acid-cost", "rec-energy-cost", "rec-processing-cost", "rec-metal-price", "sw-mc", "sw-bayes",
-    "range-soh", "range-energy", "range-mass", "range-eff", "range-target", "range-motor", "climate-region", "climate-days", "climate-temp-offset", "climate-charge-stress"
+    "bm-slider", "acid-slider", "leach-slider", "rec-time", "rec-particle", "rec-acid-order", "rec-ea-mn", "rec-acid-cost", "rec-energy-cost", "rec-processing-cost", "rec-metal-price", "sw-mc", "sw-bayes",
+    "range-soh", "range-energy", "range-pack-kg", "range-eff", "range-target", "range-motor-kw", "climate-region", "climate-days", "climate-temp-offset", "climate-charge-stress", "climate-rh-bias"
   ];
   var controls = {};
   ids.forEach(function (id) {
@@ -807,8 +899,10 @@ function degradationKnobs() {
     seiScale: num("diag-k-sei", 1.0),
     seiEa: num("diag-ea-sei", 0.56),
     p2Rate: num("diag-p2-k", 0.00182),
+    p2Ea: num("diag-ea-p2", 0.22),
     p2Soc: num("diag-p2-soc", 0.78),
     jtScale: num("diag-jt-scale", 1.0),
+    jtCoupling: num("diag-jt-coupling", 0.35),
     bvScale: num("diag-bv-scale", 1.0),
     stressExp: num("diag-stress-exp", 0.55),
     residualScale: num("diag-residual-scale", 1.0)
@@ -855,7 +949,9 @@ function naIonTerms(state, comp, T, cfg) {
   var jt = clamp(cfg.jtScale * mn * clamp(1.15 - soc, 0, 1) * expClamp((T - 298.15) * 0.018, -4, 4) * Math.exp(-0.45 * fe - dopant.jtSuppression * dop), 0, 4);
   var socCrit = clamp(cfg.p2Soc - 0.09 * mn + 0.06 * fe + dopant.p2Shift * dop, 0.55, 0.95);
   var p2Gate = sigmoid((soc - socCrit) / 0.045);
-  var p2o2Rate = clamp(cfg.p2Rate * p2Gate * expClamp((T - 298.15) * 0.024 / 25, -3, 3) * (1 + 0.35 * jt) * Math.exp(-dopant.p2Suppression * dop), 0, 0.08);
+  var p2Ref = Math.exp(-cfg.p2Ea / (kB * SEI_REF_TEMP));
+  var p2Arrhenius = Math.exp(-cfg.p2Ea / (kB * T)) / Math.max(p2Ref, 1e-30);
+  var p2o2Rate = clamp(cfg.p2Rate * p2Gate * p2Arrhenius * (1 + cfg.jtCoupling * jt) * Math.exp(-dopant.p2Suppression * dop), 0, 0.08);
   // Na+ desolvation barrier: 0.4-0.6 eV (Jian et al., Komaba et al.) — not 0.18 eV (SEI migration)
   var barrier = 0.50 + 0.025 * mn - 0.014 * fe - dopant.barrierDrop * dop;
   var desolv = clamp(Math.exp(clamp(barrier / (kB * T + 1e-10), -2, 4)) * (1 + 0.25 * relu(soc - 0.85)), 0.2, 30);
@@ -882,39 +978,63 @@ function simulateDegradation(options) {
   var socSeries = [0.78], p2RateSeries = [0], jtSeries = [0], desolvSeries = [0], dominant = ["SEI"];
   var p2 = 0, jt = 0, sei = 0, rate = 0, res = 0, knee = -1;
   var stress = 0.6 + Math.pow(cRate, cfg.stressExp);
+  var maxSubsteps = 1;
   for (var i = 1; i <= nCycles; i++) {
-    var sohWindow = clamp(Q, 0.50, 1.0);
-    var socBase = 0.78 + 0.04 * Math.min(1, cRate / 2.4);
-    var usableSoc = 0.62 + 0.38 * sohWindow;
-    var soc = clamp(0.55 + (socBase - 0.55) * usableSoc + 0.022 * Math.sin(i * 0.17) * usableSoc, 0.55, 0.98);
-    var terms = naIonTerms({ Q: Q, V: V, soc: soc }, comp, T, cfg);
-    var scale = GLOBAL_DEGRADATION_SCALE * stress;
-    var sqrtIncrement = Math.sqrt(i) - Math.sqrt(i - 1);
-    var seiLoss = enableSei ? Q * terms.seiRate * SEI_GROWTH_COEFF * sqrtIncrement * scale : 0;
-    var p2Loss = enableP2 ? Q * terms.p2o2Rate * scale : 0;
-    var jtLoss = enableJt ? Q * JT_LOSS_COEFF * terms.jt * scale : 0;
-    var desolvLoss = Q * DESOLV_LOSS_COEFF * Math.log1p(terms.desolv) * scale;
-    var exchangeProxy = clamp(0.34 + 0.18 * comp.Fe - 0.08 * Math.log1p(terms.desolv) + 0.04 * (1 - terms.beta), 0.08, 0.9);
-    var eta = Math.asinh(cRate / (2 * exchangeProxy));
-    var rateStress = 1 + 0.20 * Math.pow(Math.max(0, cRate - 1.5), 2);
-    var rateLoss = Q * cfg.bvScale * BV_RATE_LOSS_COEFF * eta * eta * rateStress * scale;
-    var explicitLoss = seiLoss + p2Loss + jtLoss + desolvLoss + rateLoss;
-    var rawResidualLoss = enableNeural ? Q * cfg.residualScale * RESIDUAL_LOSS_COEFF * sigmoid((i / nCycles - 0.62) / 0.16) * (0.8 + 0.35 * cRate) : 0;
-    // Bound residual so it can't absorb more than RESIDUAL_MAX_FRACTION of total explicit terms
-    var residualLoss = Math.min(rawResidualLoss, explicitLoss * RESIDUAL_MAX_FRACTION);
-    var dQ = seiLoss + p2Loss + jtLoss + desolvLoss + rateLoss + residualLoss;
-    Q = clamp(Q - dQ, 0.25, 1.02);
-    p2 += p2Loss; jt += jtLoss; sei += seiLoss + desolvLoss; rate += rateLoss; res += residualLoss;
+    var substeps = Math.max(1, Math.min(4, Math.round(1 + 0.9 * Math.max(0, cRate - 0.9) + 0.7 * Math.max(0, (T - SEI_REF_TEMP) / 20))));
+    maxSubsteps = Math.max(maxSubsteps, substeps);
+    var cycleScale = GLOBAL_DEGRADATION_SCALE * stress;
+    var dtScale = cycleScale / substeps;
+    var cycleP2 = 0, cycleJt = 0, cycleSei = 0, cycleRate = 0, cycleRes = 0;
+    var cycleSoc = 0.78;
+    var cycleP2Rate = 0, cycleJtRaw = 0, cycleDesolvLog = 0;
+    for (var s = 0; s < substeps; s++) {
+      var n0 = (i - 1) + s / substeps;
+      var n1 = (i - 1) + (s + 1) / substeps;
+      var nMid = (n0 + n1) * 0.5;
+      var sohWindow = clamp(Q, 0.50, 1.0);
+      var socBase = 0.78 + 0.04 * Math.min(1, cRate / 2.4);
+      var usableSoc = 0.62 + 0.38 * sohWindow;
+      var soc = clamp(0.55 + (socBase - 0.55) * usableSoc + 0.022 * Math.sin(nMid * 0.17) * usableSoc, 0.55, 0.98);
+      var terms = naIonTerms({ Q: Q, V: V, soc: soc }, comp, T, cfg);
+      var sqrtIncrement = Math.sqrt(Math.max(n1, 1e-9)) - Math.sqrt(Math.max(n0, 0));
+      var seiLoss = enableSei ? Q * terms.seiRate * SEI_GROWTH_COEFF * sqrtIncrement * cycleScale : 0;
+      var p2Loss = enableP2 ? Q * terms.p2o2Rate * dtScale : 0;
+      var jtLoss = enableJt ? Q * JT_LOSS_COEFF * terms.jt * dtScale : 0;
+      var desolvLoss = Q * DESOLV_LOSS_COEFF * Math.log1p(terms.desolv) * dtScale;
+      var exchangeProxy = clamp(0.34 + 0.18 * comp.Fe - 0.08 * Math.log1p(terms.desolv) + 0.04 * (1 - terms.beta), 0.08, 0.9);
+      var eta = Math.asinh(cRate / (2 * exchangeProxy));
+      var rateStress = 1 + 0.20 * Math.pow(Math.max(0, cRate - 1.5), 2);
+      var rateLoss = Q * cfg.bvScale * BV_RATE_LOSS_COEFF * eta * eta * rateStress * dtScale;
+      var explicitLoss = seiLoss + p2Loss + jtLoss + desolvLoss + rateLoss;
+      var progress = n1 / Math.max(1, nCycles);
+      var rawResidualLoss = enableNeural ? Q * cfg.residualScale * RESIDUAL_LOSS_COEFF * sigmoid((progress - 0.62) / 0.16) * (0.8 + 0.35 * cRate) / substeps : 0;
+      var residualLoss = Math.min(rawResidualLoss, explicitLoss * RESIDUAL_MAX_FRACTION);
+      Q = clamp(Q - (explicitLoss + residualLoss), 0.25, 1.02);
+      cycleP2 += p2Loss;
+      cycleJt += jtLoss;
+      cycleSei += seiLoss + desolvLoss;
+      cycleRate += rateLoss;
+      cycleRes += residualLoss;
+      cycleSoc = soc;
+      cycleP2Rate = terms.p2o2Rate;
+      cycleJtRaw = terms.jt;
+      cycleDesolvLog = Math.log1p(terms.desolv);
+    }
+    p2 += cycleP2;
+    jt += cycleJt;
+    sei += cycleSei;
+    rate += cycleRate;
+    res += cycleRes;
     var vDegradation = p2 * 0.15 + jt * 0.08 + sei * 0.05 + rate * 0.04;
     V = clamp(3.34 - vDegradation, 2.4, 3.5);
     cap.push(Q); voltage.push(V); p2Cum.push(p2 * 100); jtCum.push(jt * 100); seiCum.push(sei * 100); rateCum.push(rate * 100); resCum.push(res * 100);
-    socSeries.push(soc); p2RateSeries.push(terms.p2o2Rate); jtSeries.push(terms.jt); desolvSeries.push(Math.log1p(terms.desolv));
+    socSeries.push(cycleSoc); p2RateSeries.push(cycleP2Rate); jtSeries.push(cycleJtRaw); desolvSeries.push(cycleDesolvLog);
     var termsNow = [
-      ["P2-O2", p2Loss],
-      ["JT", jtLoss],
-      ["SEI", seiLoss + desolvLoss],
-      ["Rate", rateLoss],
-      ["Residual", residualLoss]
+      ["P2-O2", cycleP2],
+      ["JT", cycleJt],
+      ["SEI", cycleSei],
+      ["Rate", cycleRate],
+      ["Residual", cycleRes]
     ].sort(function (a, b) { return b[1] - a[1]; });
     dominant.push(termsNow[0][0]);
     if (knee < 0 && i > 10) {
@@ -922,7 +1042,7 @@ function simulateDegradation(options) {
       if (d2 < -1.6e-5) knee = i;
     }
   }
-  return { cap: cap, voltage: voltage, p2: p2Cum, jt: jtCum, sei: seiCum, rate: rateCum, residual: resCum, knee: knee, nCycles: nCycles, soc: socSeries, p2Rate: p2RateSeries, jtRaw: jtSeries, desolv: desolvSeries, dominant: dominant, comp: comp, cfg: cfg };
+  return { cap: cap, voltage: voltage, p2: p2Cum, jt: jtCum, sei: seiCum, rate: rateCum, residual: resCum, knee: knee, nCycles: nCycles, soc: socSeries, p2Rate: p2RateSeries, jtRaw: jtSeries, desolv: desolvSeries, dominant: dominant, comp: comp, cfg: cfg, integrator: { mode: "adaptive_substep_euler", maxSubsteps: maxSubsteps } };
 }
 
 function updateDiag() {
@@ -985,7 +1105,8 @@ function runDiagnostics() {
           : "Residual is large: calibrate the residual term against holdout cycles before making a claim.";
   setHtml("diag-decision", "<strong>Dominant mechanism:</strong> " + totals[0][0] + " (" + totals[0][1].toFixed(2) + "% loss contribution). <strong>Next experiment:</strong> " + recommendation);
   drawMechanismPie(out);
-  setHtml("diag-map-note", "State map readout: dominant=" + totals[0][0] + ", EOL=" + eol.toFixed(3) + ", fade=" + ((1 - eol) * 100).toFixed(1) + "%, RUL80=" + (r80 > 0 ? r80 : ">" + out.nCycles) + ".");
+  var integ = out.integrator || {};
+  setHtml("diag-map-note", "State map readout: dominant=" + totals[0][0] + ", EOL=" + eol.toFixed(3) + ", fade=" + ((1 - eol) * 100).toFixed(1) + "%, RUL80=" + (r80 > 0 ? r80 : ">" + out.nCycles) + ", integrator=" + (integ.mode || "explicit") + " (max sub-steps " + (integ.maxSubsteps || 1) + ").");
   var cal = document.getElementById("diag-cal-result");
   if (cal && !cal.textContent.trim()) cal.textContent = "Paste cycle,capacity rows and run calibration to fit SEI/P2/JT/stress coefficients.";
   var diagConf = computeDiagConfidence(out);
@@ -1091,7 +1212,10 @@ function calibrateDiagnostics() {
     { name: "before", values: before.cap, color: "#777" },
     { name: "calibrated", values: best.curve, color: "#ff1a1a", glow: true }
   ], { yMin: 0.65, yMax: 1.02, xMax: maxCycle, title: "Calibration fit: measured points vs simulated curves", legend: true, yDigits: 3, points: data.map(function (d) { return { x: d.cycle, y: d.capacity }; }), pointColor: "#ffffff" });
-  if (result) result.textContent = "Fitted SEI scale=" + best.cfg.seiScale.toFixed(2) + ", P2 rate=" + best.cfg.p2Rate.toFixed(4) + ", JT scale=" + best.cfg.jtScale.toFixed(2) + ". RMSE=" + rmse.toFixed(4) + ", R2=" + r2.toFixed(3) + ".";
+  if (result) {
+    var fitFlag = rmse > 0.03 ? " Poor fit warning: add more measured points or revisit assumptions." : "";
+    result.textContent = "Method: bounded grid-search MSE (375 candidates). Fitted SEI scale=" + best.cfg.seiScale.toFixed(2) + ", P2 rate=" + best.cfg.p2Rate.toFixed(4) + ", JT scale=" + best.cfg.jtScale.toFixed(2) + ", stress exp=" + best.cfg.stressExp.toFixed(3) + ". RMSE=" + rmse.toFixed(4) + ", R2=" + r2.toFixed(3) + "." + fitFlag;
+  }
   runDiagnostics();
 }
 
@@ -1501,8 +1625,9 @@ function renderBYOD(data) {
     var labelGate = id === "M5_BMS_TGN";
     var hasCheckpoint = m.checkpoint_source === "trained_forward" && !preview && !labelGate;
     var tag = (preview || labelGate) ? "warn" : (hasCheckpoint ? "ok" : "ok");
-    var label = preview ? "Research Preview" : labelGate ? "Label Gate" : (hasCheckpoint ? "trained forward" : (m.source || "derived"));
-    return '<div class="switch-row"><div class="switch-label"><span class="name">' + escapeHtml(id) + '</span><span class="desc">' + escapeHtml(desc) + '</span></div><span class="tag ' + tag + '">' + escapeHtml(label) + "</span></div>";
+    var label = preview ? "Preview (Not Validated)" : labelGate ? "Label Gate" : (hasCheckpoint ? "trained forward" : (m.source || "derived"));
+    var displayDesc = preview ? "Preview only. " + desc : desc;
+    return '<div class="switch-row"><div class="switch-label"><span class="name">' + escapeHtml(id) + '</span><span class="desc">' + escapeHtml(displayDesc) + '</span></div><span class="tag ' + tag + '">' + escapeHtml(label) + "</span></div>";
   }).join("");
   setHtml("byod-model-output", modelRows || '<div class="switch-row"><div class="switch-label"><span class="name">No outputs</span><span class="desc">Feature extraction did not produce enough inputs.</span></div><span class="tag warn">Low data</span></div>');
   var chem = models.M13_ChemIdentifier ? models.M13_ChemIdentifier.predicted_family : "unknown";
@@ -1757,6 +1882,34 @@ function loadDiagnosticsInMaterials() {
   showToast("Diagnostics composition loaded into Materials with dopant species preserved.", "ok");
 }
 
+function pushDiagnosticsToBms() {
+  var diag = window.__kfDiag || simulateDegradation();
+  var eol = Number(diag.cap && diag.cap.length ? diag.cap[diag.cap.length - 1] : 0.86);
+  var fade = clamp(1 - eol, 0.02, 0.55);
+  var loadEl = document.getElementById("bms-load");
+  var gateEl = document.getElementById("bms-rct-gate");
+  var threshEl = document.getElementById("bms-risk-thresh");
+  var faultEl = document.getElementById("sw-fault");
+  if (loadEl) loadEl.value = clamp(0.95 + fade * 2.1, 0.8, 2.2).toFixed(2);
+  if (gateEl) gateEl.value = clamp(0.039 + fade * 0.030, 0.032, 0.090).toFixed(3);
+  if (threshEl) threshEl.value = clamp(0.44 - fade * 0.18, 0.20, 0.55).toFixed(2);
+  if (faultEl) faultEl.checked = true;
+  bmsPresetFromDiagnostics = {
+    cell: 0,
+    r0Multiplier: clamp(1 + fade * 1.8, 1.0, 2.2),
+    seiOffset: clamp(fade * 0.025, 0, 0.08)
+  };
+  updateBMS();
+  navigate("bms");
+  showToast("Diagnostics stress profile pushed to BMS (cell C0 seeded as degraded baseline).", "ok");
+}
+
+function sendBmsToDecisionQueue() {
+  navigate("decisions");
+  renderDecisionConsole();
+  showToast("Decision queue refreshed with current BMS evidence.", "ok");
+}
+
 function drawDegradationSurface(cv, out) {
   if (!cv) return;
   var ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
@@ -1831,6 +1984,27 @@ function bmsTopologyInfo(n, mode) {
   };
 }
 
+function topologyPairSummary(n, mode) {
+  if (mode === "4s2p" || mode === "2s4p") {
+    var info = bmsTopologyInfo(n, mode);
+    var groups = [];
+    for (var col = 0; col < info.series; col++) {
+      var members = [];
+      for (var row = 0; row < info.parallel; row++) {
+        var idx = col + row * info.series;
+        if (idx < n) members.push("C" + idx);
+      }
+      if (members.length > 1) groups.push(members);
+    }
+    if (groups.length) {
+      var rendered = groups.slice(0, 4).map(function (g) { return g.join("||"); }).join(", ");
+      return "Parallel groups: " + rendered + (groups.length > 4 ? ", ..." : "") + ".";
+    }
+  }
+  if (mode === "series") return "No parallel sharing; all cells carry the same string current.";
+  return "Grid mode links immediate geometric neighbors only.";
+}
+
 function buildTopology(n, mode) {
   var info = bmsTopologyInfo(n, mode);
   var cols = info.mode === "grid" ? (n <= 8 ? n : Math.ceil(Math.sqrt(n * 1.4))) : info.series;
@@ -1871,6 +2045,7 @@ function bmsKnobs(useAsym) {
 
 function bmsScenarioKey(n, duration, fault, eis, asym, ambient, knobs) {
   knobs = knobs || bmsKnobs(asym);
+  var preset = bmsPresetFromDiagnostics || {};
   return [
     n,
     duration,
@@ -1885,7 +2060,10 @@ function bmsScenarioKey(n, duration, fault, eis, asym, ambient, knobs) {
     Number(knobs.rctGate).toFixed(4),
     Number(knobs.threshold).toFixed(4),
     Number(knobs.lossRatio).toFixed(2),
-    knobs.topologyMode || "4s2p"
+    knobs.topologyMode || "4s2p",
+    Number(preset.cell != null ? preset.cell : -1),
+    Number(preset.r0Multiplier || 1).toFixed(3),
+    Number(preset.seiOffset || 0).toFixed(4)
   ].join("|");
 }
 
@@ -1906,7 +2084,7 @@ function bmsCurrentShare(topology, cells, idx) {
   return clamp((own / Math.max(invSum, 1e-9)) * peers.length, 0.35, 2.4);
 }
 
-function simulateBmsPhysics(n, duration, injectFault, useEis, useAsym, seed) {
+function simulateBmsPhysics(n, duration, injectFault, useEis, useAsym, seed, preset) {
   var cfg = bmsKnobs(useAsym);
   var topology = buildTopology(n, cfg.topologyMode);
   var steps = clamp(Math.round(duration), 60, 240);
@@ -1916,11 +2094,14 @@ function simulateBmsPhysics(n, duration, injectFault, useEis, useAsym, seed) {
   var rng = mulberry32(seed != null ? seed : 42);
   var cells = [];
   var faultCell = injectFault ? Math.floor(rng() * n) : -1;
+  if (preset && Number.isFinite(preset.cell)) faultCell = clamp(Math.round(preset.cell), 0, n - 1);
   for (var i = 0; i < n; i++) {
+    var r0Mul = (preset && i === faultCell) ? clamp(Number(preset.r0Multiplier) || 1, 1, 3) : 1;
+    var seiOffset = (preset && i === faultCell) ? clamp(Number(preset.seiOffset) || 0, 0, 0.10) : 0;
     cells.push({
       T: ambient + seededGaussian(rng) * 0.25,
-      r0: 0.033 * (1 + seededGaussian(rng) * 0.025),
-      sei: 0.010 + rng() * 0.002,
+      r0: 0.033 * (1 + seededGaussian(rng) * 0.025) * r0Mul,
+      sei: 0.010 + rng() * 0.002 + seiOffset,
       risk: 0,
       rawHist: []
     });
@@ -2085,7 +2266,8 @@ function updateBMS() {
   if (topoNote) {
     var n = parseInt(document.getElementById("pack-slider").value, 10) || 8;
     var info = bmsTopologyInfo(n);
-    topoNote.textContent = info.label + ": neighbor terms use previous-timestep heat and risk, avoiding algebraic circularity. Asymmetric gate uses FN/FP cost " + Math.max(1, num("bms-loss-ratio", 6.0)).toFixed(1) + "x.";
+    var presetNote = bmsPresetFromDiagnostics ? " Diagnostics preset active on C" + bmsPresetFromDiagnostics.cell + "." : "";
+    topoNote.textContent = info.label + ": " + topologyPairSummary(n, info.mode) + " Thermal neighbors use previous-timestep heat/risk (t-dt) to avoid algebraic circularity. Asymmetric gate uses FN/FP cost " + Math.max(1, num("bms-loss-ratio", 6.0)).toFixed(1) + "x." + presetNote;
   }
 }
 
@@ -2099,7 +2281,7 @@ function runBMS() {
   var seedEl = document.getElementById("bms-seed");
   var seed = seedEl ? parseInt(seedEl.value, 10) : 42;
   if (!Number.isFinite(seed)) seed = 42;
-  var sim = simulateBmsPhysics(n, dur, fault, eis, asym, seed);
+  var sim = simulateBmsPhysics(n, dur, fault, eis, asym, seed, bmsPresetFromDiagnostics);
   var ambientC = num("bms-ambient", 45);
   var scenarioKey = bmsScenarioKey(n, dur, fault, eis, asym, ambientC);
   window.__kfBms = {
@@ -2114,7 +2296,8 @@ function runBMS() {
     maxRisk: sim.maxRisk,
     topology: sim.topology.info,
     lossRatio: sim.lossRatio,
-    scenarioKey: scenarioKey
+    scenarioKey: scenarioKey,
+    preset: bmsPresetFromDiagnostics
   };
   var sweepNote = document.getElementById("bms-sweep-note");
   if (sweepNote) {
@@ -2136,7 +2319,8 @@ function runBMS() {
     grid.appendChild(d);
   }
   var log = document.getElementById("bms-log");
-  log.innerHTML = '<div class="cmd">$ bms --thermal-ode --cells=' + n + " --topology=" + escapeHtml(sim.topology.info.label) + " --fault=" + (sim.faultCell >= 0 ? "C" + sim.faultCell : "none") + ' --seed=' + seed + '</div><div class="info">Pack graph built with ' + sim.topology.edges.length + " thermal edges. Ambient=" + ambientC.toFixed(0) + " C EIS=" + (eis ? "on" : "off") + " threshold=" + sim.threshold.toFixed(2) + " FN/FP=" + sim.lossRatio.toFixed(1) + " seed=" + seed + "</div>";
+  var presetTxt = bmsPresetFromDiagnostics ? " diagnostics-preset=C" + bmsPresetFromDiagnostics.cell + " r0x" + Number(bmsPresetFromDiagnostics.r0Multiplier || 1).toFixed(2) : "";
+  log.innerHTML = '<div class="cmd">$ bms --thermal-ode --cells=' + n + " --topology=" + escapeHtml(sim.topology.info.label) + " --fault=" + (sim.faultCell >= 0 ? "C" + sim.faultCell : "none") + ' --seed=' + seed + '</div><div class="info">Pack graph built with ' + sim.topology.edges.length + " thermal edges. Ambient=" + ambientC.toFixed(0) + " C EIS=" + (eis ? "on" : "off") + " threshold=" + sim.threshold.toFixed(2) + " FN/FP=" + sim.lossRatio.toFixed(1) + " seed=" + seed + presetTxt + "</div>";
   var cv = makeCanvas("bms-thermal-chart");
   var trendCv = makeCanvas("bms-trend-chart");
   var idx = 0;
@@ -2221,7 +2405,7 @@ function runBmsSweep() {
   var correctFaultHits = 0;
   var nonFaultAlerts = 0;
   for (var i = 0; i < sweepCount; i++) {
-    var sim = simulateBmsPhysics(n, dur, fault, eis, asym, seedBase + i);
+    var sim = simulateBmsPhysics(n, dur, fault, eis, asym, seedBase + i, bmsPresetFromDiagnostics);
     var frame = sim.frames[sim.frames.length - 1];
     if (!frame) continue;
     var maxRisk = Number(frame.maxRisk);
@@ -3081,15 +3265,28 @@ function diffusionCoreConversion(k, tMin) {
   }
   return clamp((lo + hi) / 2, 0, 0.995);
 }
-function recoveryForElement(el, acid, tempC, tMin, bayes) {
+function leachingTransportState(el, acid, tempC) {
   var R = 8.314;
   var T = tempC + 273.15;
   var tempFactor = Math.exp(-el.Ea / R * (1 / T - 1 / 353.15));
-  var k = el.k0 * Math.pow(acid, el.order) * tempFactor * Math.pow(50 / el.particle, 0.35);
-  var surfaceX = shrinkingCoreConversion(k, tMin);
-  var diffusionX = diffusionCoreConversion(k * 0.62, tMin);
-  var diffusionWeight = clamp((25 - el.particle) / 18, 0, 0.75);
-  var x = surfaceX * (1 - diffusionWeight) + diffusionX * diffusionWeight;
+  var kSurface = el.k0 * Math.pow(Math.max(acid, 0.05), el.order) * tempFactor;
+  var particleFactor = Math.pow(50 / Math.max(el.particle, 2), 0.35);
+  var k = kSurface * particleFactor;
+  // Dynamic diffusion criterion via Thiele-like modulus (phi > ~0.3 => diffusion influence)
+  var rpM = Math.max(1e-7, el.particle * 0.5e-6);
+  var dEff = 4.8e-13 * Math.exp(0.016 * (tempC - 80)) * Math.pow(Math.max(acid, 0.3) / 2.0, 0.20);
+  dEff = Math.max(dEff, 1e-16);
+  var phi = rpM * Math.sqrt(Math.max(kSurface, 1e-12) / dEff);
+  var diffusionWeight = clamp((phi - 0.30) / 0.90, 0, 0.85);
+  var rpCrit = 0.30 / Math.sqrt(Math.max(kSurface, 1e-12) / dEff);
+  var particleCritUm = rpCrit * 2e6;
+  return { k: k, phi: phi, diffusionWeight: diffusionWeight, particleCritUm: particleCritUm };
+}
+function recoveryForElement(el, acid, tempC, tMin, bayes) {
+  var tr = leachingTransportState(el, acid, tempC);
+  var surfaceX = shrinkingCoreConversion(tr.k, tMin);
+  var diffusionX = diffusionCoreConversion(tr.k * 0.62, tMin);
+  var x = surfaceX * (1 - tr.diffusionWeight) + diffusionX * tr.diffusionWeight;
   if (!bayes || !el.prior) return x;
   return clamp(0.75 * x + 0.25 * betaMean(el.prior[0], el.prior[1]), 0, 0.995);
 }
@@ -3143,6 +3340,7 @@ function runRecycling() {
   var bars = document.getElementById("recycle-bars");
   bars.innerHTML = "";
   var targets = elements.map(function (el) { return recoveryForElement(el, acid, temp, tFinal, bay); });
+  var mnTransport = leachingTransportState(elements[0], acid, temp);
   elements.forEach(function (el, i) {
     var row = document.createElement("div");
     row.className = "recovery-row";
@@ -3196,9 +3394,13 @@ function runRecycling() {
   var productPurity = clamp(0.94 - impurityPenalty * 0.18 + (targets[0] + targets[1] + targets[2]) * 0.012, 0.70, 0.98);
   var log = document.getElementById("recycle-log");
   log.innerHTML = '<div class="cmd">$ recycling --shrinking-core --mass=' + mass + "kg --acid=" + acid + "M --temp=" + temp + 'C</div>';
-  log.innerHTML += '<div class="info">ODE: 1 - (1-X)^(1/3) = k(C_acid,T,Rp)t, with Arrhenius temperature scaling.</div>';
+  log.innerHTML += '<div class="info">ODE: 1 - (1-X)^(1/3) = k(C_acid,T,Rp)t, with Arrhenius temperature scaling and Thiele-based diffusion blending.</div>';
   if (mc) log.innerHTML += '<div class="info">Monte Carlo: ' + RECYCLING_MC_SAMPLES + ' feedstock, assay, and particle-size samples with deterministic scenario seed.</div>';
-  if (cfg.particle < 25) log.innerHTML += '<div class="warn">Fine particles detected: mixed product-layer diffusion correction applied below 25 um.</div>';
+  if (mnTransport.phi > 0.30) {
+    log.innerHTML += '<div class="warn">Diffusion-influenced regime: phi=' + mnTransport.phi.toFixed(2) + " (>0.30). Equivalent transition size at this acid/temp is ~" + mnTransport.particleCritUm.toFixed(1) + " um.</div>";
+  } else {
+    log.innerHTML += '<div class="info">Surface-control regime: phi=' + mnTransport.phi.toFixed(2) + " (<=0.30). Equivalent transition size ~" + mnTransport.particleCritUm.toFixed(1) + " um.</div>";
+  }
   if (bay) log.innerHTML += '<div class="info">Bayesian priors: Mn Beta(8.8,1.2), Fe Beta(7.2,2.8), Na Beta(6.5,3.5).</div>';
   log.innerHTML += '<div class="ok">Recovered metals: ' + totalRecovered.toFixed(1) + "kg, 90% interval " + lo.toFixed(1) + "-" + hi.toFixed(1) + "kg</div>";
   log.innerHTML += '<div class="info">Process cost estimate: INR ' + cost.toFixed(0) + " per batch; product purity proxy " + (productPurity * 100).toFixed(1) + "%</div>";
@@ -3206,14 +3408,14 @@ function runRecycling() {
   var decision = marginProxy > 0 && targets[0] > 0.82 && productPurity > 0.86
     ? "Run this recipe as a pilot batch; Mn recovery and economics are inside the current gate."
     : "Do not run as-is; adjust acid/time/particle size or improve impurity control before pilot scale.";
-  window.__kfRecycling = { totalRecovered: totalRecovered, lo: lo, hi: hi, purity: productPurity, cost: cost, marginProxy: marginProxy, elements: elements, targets: targets, mass: mass, acid: acid, tempC: temp, leachMin: cfg.time, particleUm: cfg.particle, economics: { acidCost: cfg.acidCost, energyCost: cfg.energyCost, processingCost: cfg.processingCost, metalPrice: cfg.metalPrice } };
+  window.__kfRecycling = { totalRecovered: totalRecovered, lo: lo, hi: hi, purity: productPurity, cost: cost, marginProxy: marginProxy, elements: elements, targets: targets, mass: mass, acid: acid, tempC: temp, leachMin: cfg.time, particleUm: cfg.particle, transport: { phi: mnTransport.phi, particleCritUm: mnTransport.particleCritUm, diffusionWeight: mnTransport.diffusionWeight }, economics: { acidCost: cfg.acidCost, energyCost: cfg.energyCost, processingCost: cfg.processingCost, metalPrice: cfg.metalPrice } };
   setHtml("recycle-decision", "<strong>Recipe output:</strong> recovered " + totalRecovered.toFixed(1) + " kg, Mn " + (targets[0] * 100).toFixed(1) + "%, purity proxy " + (productPurity * 100).toFixed(1) + "%, cost INR " + cost.toFixed(0) + ". <strong>Decision:</strong> " + decision);
   setReadouts("recycle-readout", [
     { k: "Recovered", v: totalRecovered.toFixed(1) + " kg" },
     { k: "90% interval", v: lo.toFixed(1) + "-" + hi.toFixed(1) + " kg" },
     { k: "Purity proxy", v: (productPurity * 100).toFixed(1) + "%" },
     { k: "Margin proxy", v: "INR " + marginProxy.toFixed(0) },
-    { k: "Particle regime", v: cfg.particle < 25 ? "mixed diffusion" : "surface control" },
+    { k: "Particle regime", v: mnTransport.phi > 0.30 ? "mixed diffusion (phi>0.3)" : "surface control (phi<=0.3)" },
     { k: "Metal price", v: "INR " + cfg.metalPrice.toFixed(0) + "/kg" }
   ]);
   var recConf = computeRecyclingConfidence(window.__kfRecycling);
@@ -3565,12 +3767,14 @@ function initArchitecture() {
       tb.appendChild(tr);
     });
   }
+  renderHardpointTable();
 }
 
 function modelStatusLabel(status, checkpointPresent) {
+  status = String(status || "");
+  if (/preview/i.test(status)) return "Preview";
+  if (/label[_ ]?gate/i.test(status)) return "Label Gate";
   if (!checkpointPresent) return "Simulation";
-  if (status === "research_preview") return "Preview";
-  if (status === "label_gate") return "Label Gate";
   if (status === "trained_checkpoint") return "Trained";
   return String(status || "Unknown").replace(/_/g, " ");
 }
@@ -3586,18 +3790,42 @@ function renderModelRegistryFromApi(data) {
   tb.innerHTML = "";
   data.models.forEach(function (m) {
     var tr = document.createElement("tr");
-    var label = modelStatusLabel(m.status, !!m.checkpoint_present);
-    var checkpoint = m.checkpoint_present
-      ? (m.checkpoint_source_zip || m.checkpoint_file || "checkpoint present")
+    var modelId = String(m.id || m.name || m.model || "").trim();
+    var checkpointPresent = m.checkpoint_present != null
+      ? !!m.checkpoint_present
+      : !!(m.checkpoint_file || m.checkpoint);
+    var label = modelStatusLabel(m.status || (checkpointPresent ? "trained_checkpoint" : "simulation"), checkpointPresent);
+    var checkpoint = checkpointPresent
+      ? (m.checkpoint_source_zip || m.checkpoint_file || m.checkpoint || "checkpoint present")
       : "not found";
-    tr.innerHTML = '<td style="font-weight:600">' + escapeHtml(m.id || m.name || "") +
-      "</td><td>" + escapeHtml(m.type || "") +
+    tr.innerHTML = '<td style="font-weight:600">' + escapeHtml(modelId) +
+      "</td><td>" + escapeHtml(m.type || m.version || "") +
       '</td><td><span class="tag ' + modelStatusClass(label) + '">' + escapeHtml(label) +
       "</span></td><td>" + escapeHtml(checkpoint) +
-      '</td><td style="font-family:JetBrains Mono;font-size:11px">' + escapeHtml(String(m.params || "--")) +
+      '</td><td style="font-family:JetBrains Mono;font-size:11px">' + escapeHtml(String(m.params || m.param_count || "--")) +
       "</td>";
     tb.appendChild(tr);
   });
+  renderHardpointTable(data.models);
+}
+
+function renderHardpointTable(models) {
+  var body = document.getElementById("hardpoint-table-body");
+  if (!body) return;
+  var orderedIds = [];
+  if (Array.isArray(models)) {
+    models.forEach(function (m) {
+      var id = String(m.id || m.name || m.model || "").trim();
+      if (id && HARDPOINT_MAP[id] && orderedIds.indexOf(id) < 0) orderedIds.push(id);
+    });
+  }
+  if (!orderedIds.length) orderedIds = Object.keys(HARDPOINT_MAP);
+  body.innerHTML = orderedIds.map(function (id) {
+    var meta = HARDPOINT_MAP[id] || {};
+    var fromApi = Array.isArray(models) ? models.find(function (m) { return String(m.id || m.name || m.model || "").trim() === id; }) : null;
+    var fallback = fromApi && (fromApi.without_checkpoint || fromApi.fallback_mode) ? (fromApi.without_checkpoint || fromApi.fallback_mode) : (meta.fallback || "rules-only fallback");
+    return "<tr><td>" + escapeHtml(id) + "</td><td>" + escapeHtml(meta.hardpoint || "--") + "</td><td>" + escapeHtml(fallback) + "</td></tr>";
+  }).join("");
 }
 
 function renderCheckpointProvenance(data) {
@@ -3631,10 +3859,12 @@ function fetchModelRegistry() {
     })
     .then(function (data) {
       renderModelRegistryFromApi(data);
+      renderHardpointTable(data.models);
       renderCheckpointProvenance(data);
     })
     .catch(function (err) {
       console.warn("Model registry fetch failed", err);
+      renderHardpointTable();
     });
 }
 
@@ -3684,7 +3914,7 @@ function showAPI(ep) {
     "/api/byod/webhook/cycle": '{\n  "status": "accepted",\n  "result": {"cell_id": "A17", "cycle": 42, "recommendation": "continue", "soh": 0.943}\n}',
     "/api/byod/session/{session_id}": '{\n  "format": "kineticsforge_canonical_v1",\n  "features": {"capacity_fade_rate_ah_per_cycle": -0.00014},\n  "predictions": {"inference_mode": "checkpoint_plus_rules"}\n}',
     "/api/byod/session/{session_id}/export-json": '{\n  "format": "kineticsforge_canonical_v1",\n  "cycle_summary": [],\n  "checkpoint_inference": {"status": "ok"}\n}',
-    "/api/models": '{\n  "total": 14,\n  "checkpoint_manifest": {"files": 57, "generated_at": "..."},\n  "models": [{"id": "M11_ElectrolyteHealth", "checkpoint_present": true, "checkpoint_source_zip": "results (25).zip"}]\n}',
+    "/api/models": '{\n  "total": 14,\n  "checkpoint_manifest": {"files": 57, "generated_at": "..."},\n  "models": [{"id": "M11_ElectrolyteHealth", "checkpoint_present": true, "hardpoint": "EIS/plating diagnostic head", "without_checkpoint": "tier-1 heuristic fallback", "checkpoint_source_zip": "results (25).zip"}]\n}',
     "/api/chat": '{\n  "answer": "C6 is highlighted because its risk crossed the action threshold...",\n  "source": "openrouter",\n  "memory": "browser_recent_turns"\n}'
   };
   var r = examples[ep.p] || '{"status":"ok","endpoint":"' + ep.p + '"}';
@@ -4060,41 +4290,52 @@ function runRangeEstimate() {
   var chemistryDerate = clamp(0.90 + 0.08 * (Number(mat.stability) || 0.5) - 0.06 * (Number(mat.oxygenRisk) || 0) - 0.05 * (Number(mat.chargeRisk) || 0), 0.65, 0.96);
 
   var pts = [];
+  var vehicleMassKg = packKg + 1400; // pack + glider
+  var cruisePowerKwReq = clamp(effKwhPer100km * (vehicleMassKg / 1850) * 1.05, 8, 45);
+  var powerFactor = clamp(motorKw / Math.max(5, cruisePowerKwReq), 0.55, 1.0);
   for (var s = 1.0; s >= 0.5; s -= 0.02) {
     var usableKwh = s * energyWhKg * packKg / 1000 * chemistryDerate;
-    var rangeKm = usableKwh / effKwhPer100km * 100;
-    pts.push({ soh: s, range_km: rangeKm, usable_kwh: usableKwh });
+    var rangeEnergyKm = usableKwh / effKwhPer100km * 100;
+    var rangePowerKm = rangeEnergyKm * powerFactor;
+    pts.push({ soh: s, range_km: rangeEnergyKm, range_power_km: rangePowerKm, range_effective_km: Math.min(rangeEnergyKm, rangePowerKm), usable_kwh: usableKwh });
   }
   window.__kfRange = pts;
   var current = pts.find(function (p) { return Math.abs(p.soh - soh) < 0.015; }) || pts[0];
   var cv = makeCanvas("range-chart");
   if (cv) {
-    drawMultiLine(cv, [{ name: "range", values: pts.map(function (p) { return p.range_km; }), color: "#22c55e", glow: true }], {
-      yMin: 0, xMax: 100, title: "Range vs SOH with material derating", yDigits: 0,
-      points: [{ x: (1 - soh) / 0.5 * 100, y: current.range_km }], pointColor: "#ffffff"
+    drawMultiLine(cv, [
+      { name: "energy-limited", values: pts.map(function (p) { return p.range_km; }), color: "#22c55e", glow: true },
+      { name: "power-limited", values: pts.map(function (p) { return p.range_effective_km; }), color: "#38bdf8" }
+    ], {
+      yMin: 0, xMax: 100, title: "Range vs SOH (energy line + power-limited overlay)", yDigits: 0, legend: true,
+      points: [{ x: (1 - soh) / 0.5 * 100, y: current.range_effective_km }], pointColor: "#ffffff"
     });
   }
-  var rangeDiff = current.range_km - targetRangeKm;
+  var rangeDiff = current.range_effective_km - targetRangeKm;
   var specificPower = motorKw * 1000 / packKg;
   // Power-limited acceleration estimate: F=ma, P=Fv => t(0-100) ~ 0.5*m*v^2/P
-  var vehicleMassKg = packKg + 1400; // pack + glider
   var v100 = 100 / 3.6; // 100 km/h in m/s
   var t0to100 = 0.5 * vehicleMassKg * v100 * v100 / (motorKw * 1000 * 0.85);
   setReadouts("range-readout", [
-    { k: "Current Range", v: current.range_km.toFixed(1) + " km" },
+    { k: "Current Range", v: current.range_effective_km.toFixed(1) + " km" },
+    { k: "Energy-limited", v: current.range_km.toFixed(1) + " km" },
+    { k: "Power-limited", v: current.range_power_km.toFixed(1) + " km" },
     { k: "Usable kWh", v: current.usable_kwh.toFixed(1) + " kWh" },
     { k: "vs Target", v: (rangeDiff >= 0 ? "+" : "") + rangeDiff.toFixed(0) + " km" },
     { k: "Specific Power", v: specificPower.toFixed(0) + " W/kg" },
+    { k: "Cruise Power Req", v: cruisePowerKwReq.toFixed(1) + " kW" },
     { k: "0-100 km/h", v: t0to100.toFixed(1) + " s (est)" },
     { k: "Chemistry Derate", v: (chemistryDerate * 100).toFixed(0) + "%" }
   ]);
-  showToast("Range: " + current.range_km.toFixed(0) + " km vs target " + targetRangeKm + " km.", "ok");
+  showToast("Range: " + current.range_effective_km.toFixed(0) + " km vs target " + targetRangeKm + " km.", "ok");
 }
 
 // ── Electrolyte Recommendation ─────────────────────────────────────────
 function runElectrolyteRecommend() {
   var mat = currentMaterialForAnalytics();
   var comp = mat.comp || {};
+  var diagComp = diagnosticComposition();
+  var dopantHint = (comp.ti || comp.ti_doped) ? "Ti" : (comp.al || comp.al_doped) ? "Al" : (diagComp.dopant_type || "generic");
   var el = document.getElementById("electrolyte-result");
   if (!el) return;
   var electrolyte, additives, rationale;
@@ -4105,20 +4346,20 @@ function runElectrolyteRecommend() {
   } else if ((mat.jtIndex || 0) > 0.35) {
     electrolyte = "Carbonate EC/EMC with 1.0 M NaPF6";
     var jt_additives = ["2 wt% FEC", "1 wt% VC"];
-    if (comp.ti || comp.ti_doped) jt_additives.push("Reduced FEC (Ti lowers Na+ migration barrier)");
-    if (comp.al || comp.al_doped) jt_additives.push("Mn scavenger screen (Al pillar stabilizes but Mn3+ still dissolves)");
+    if (dopantHint === "Ti") jt_additives.push("Reduced FEC (Ti lowers Na+ migration barrier)");
+    if (dopantHint === "Al") jt_additives.push("Mn scavenger screen (Al pillar stabilizes but Mn3+ still dissolves)");
     else jt_additives.push("Mn scavenger screen");
     additives = jt_additives;
-    rationale = "Mn3+-rich recipe: prioritize CEI quality and transition-metal dissolution control." + (comp.ti ? " Ti doping lowers Na+ desolvation energy — consider reduced FEC loading." : "");
+    rationale = "Mn3+-rich recipe: prioritize CEI quality and transition-metal dissolution control." + (dopantHint === "Ti" ? " Ti doping lowers Na+ desolvation energy; consider reduced FEC loading." : "");
   } else if (Number(comp.Fe) > Number(comp.Mn)) {
     electrolyte = "Glyme ether with 1.0 M NaTFSI";
-    additives = (comp.al || comp.al_doped) ? ["FEC confirmation screen", "No SN needed (Al pillar reduces lattice strain)"] : ["FEC confirmation screen"];
+    additives = (dopantHint === "Al") ? ["FEC confirmation screen", "No SN needed (Al pillar reduces lattice strain)"] : ["FEC confirmation screen"];
     rationale = "Fe-rich lower-voltage recipe: ether solvation can reduce Na+ desolvation penalty and improve rate response.";
   } else {
     electrolyte = "Carbonate EC/PC with 1.0 M NaClO4 or NaPF6";
     additives = ["3-5 wt% FEC", "1 wt% succinonitrile"];
-    if (comp.ti || comp.ti_doped) additives.push("Ti-doped: consider lower FEC loading (3 wt%)");
-    if (comp.al || comp.al_doped) additives.push("Al-doped: add PS additive for cathode CEI reinforcement");
+    if (dopantHint === "Ti") additives.push("Ti-doped: consider lower FEC loading (3 wt%)");
+    if (dopantHint === "Al") additives.push("Al-doped: add PS additive for cathode CEI reinforcement");
     rationale = "Balanced Mn/Fe layered oxide: carbonate baseline with FEC, then validate CEI stability at the selected upper cutoff.";
   }
   var compatibility = clamp(0.82 - 0.30 * (mat.oxygenRisk || 0) - 0.18 * (mat.chargeRisk || 0) + 0.10 * (mat.rateCapability || 0.5), 0, 1);
@@ -4127,7 +4368,7 @@ function runElectrolyteRecommend() {
   html += '<div style="font-size:0.82rem;color:#e8e8e8;font-weight:600;margin-bottom:0.4rem">' + escapeHtml(electrolyte) + '</div>';
   html += '<div style="font-size:0.72rem;color:#aaa;margin-bottom:0.5rem"><strong>Additives:</strong> ' + additives.map(escapeHtml).join(", ") + '</div>';
   html += '<div style="font-size:0.68rem;color:#777;border-left:2px solid #ff1a1a;padding-left:0.6rem">' + escapeHtml(rationale) + '</div>';
-  html += '<div style="margin-top:0.6rem;font-size:0.64rem;color:#666">Compatibility ' + (compatibility * 100).toFixed(0) + '%, phase ' + escapeHtml(mat.phaseState || "screened") + '</div>';
+  html += '<div style="margin-top:0.6rem;font-size:0.64rem;color:#666">Compatibility ' + (compatibility * 100).toFixed(0) + '%, phase ' + escapeHtml(mat.phaseState || "screened") + ', dopant basis ' + escapeHtml(dopantHint) + '</div>';
   html += '</div>';
   el.innerHTML = html;
   showToast("Electrolyte: " + electrolyte.split(" with ")[0].trim(), "ok");
@@ -4150,25 +4391,45 @@ function generateClimateProfile(regionKey, days) {
   var rhs = [];
   var heatStress = [];
   var coldPlating = [];
+  var moistureIngress = [];
+  var naohRisk = [];
+  var corrosionRisk = [];
   var offset = num("climate-temp-offset", 0.0);
   var chargeStress = num("climate-charge-stress", 1.0);
+  var rhBias = num("climate-rh-bias", 0.0);
   for (var h = 0; h < n; h++) {
     var day = h / 24.0;
     var seasonal = seed.seasonAmp * Math.sin(2 * Math.PI * (day / 365 + 0.18));
     var diurnal = seed.diurnalAmp * Math.sin(2 * Math.PI * ((h % 24) - 14) / 24);
     var t = seed.meanT + seasonal + diurnal + offset;
     var monsoon = seed.monsoonAmp * Math.sin(2 * Math.PI * (day / 365 - 0.05));
-    var rh = clamp(seed.meanRH + monsoon - 0.45 * diurnal, 8, 98);
-    // Humidity effect: high RH accelerates electrolyte water ingress and SEI instability
-    var humidityStress = clamp((rh - 60) / 100, 0, 0.4);
-    var hs = 1 / (1 + Math.exp(-(t - 42) / 3.5)) * (1 + 0.004 * Math.max(rh - 60, 0) + humidityStress * 0.12) * chargeStress;
+    var rh = clamp(seed.meanRH + monsoon - 0.45 * diurnal + rhBias, 8, 98);
+    // Humidity channels: moisture ingress, NaOH tendency, and collector corrosion proxy.
+    var moisture = clamp((rh - 65) / 25, 0, 1) * (0.55 + 0.45 * clamp(chargeStress / 2.0, 0.4, 1.5));
+    var naoh = clamp((rh - 72) / 18, 0, 1) * sigmoid((t - 30) / 5);
+    var corrosion = clamp((rh - 75) / 16, 0, 1) * sigmoid((t - 34) / 4);
+    var thermal = sigmoid((t - 42) / 3.5);
+    var hs = thermal * (1 + 0.20 * moisture + 0.15 * naoh + 0.12 * corrosion) * chargeStress;
     var cp = 1 / (1 + Math.exp((t - 2) / 3));
     temps.push(t);
     rhs.push(rh);
     heatStress.push(clamp(hs, 0, 1.5));
     coldPlating.push(clamp(cp, 0, 1));
+    moistureIngress.push(clamp(moisture, 0, 1.2));
+    naohRisk.push(clamp(naoh, 0, 1));
+    corrosionRisk.push(clamp(corrosion, 0, 1));
   }
-  return { name: seed.name, temps: temps, rhs: rhs, heatStress: heatStress, coldPlating: coldPlating, hours: n };
+  return {
+    name: seed.name,
+    temps: temps,
+    rhs: rhs,
+    heatStress: heatStress,
+    coldPlating: coldPlating,
+    moistureIngress: moistureIngress,
+    naohRisk: naohRisk,
+    corrosionRisk: corrosionRisk,
+    hours: n
+  };
 }
 
 function runClimateStress() {
@@ -4195,13 +4456,19 @@ function runClimateStress() {
   var hsHours = profile.heatStress.filter(function (v) { return v > 0.1; }).length;
   var cpHours = profile.coldPlating.filter(function (v) { return v > 0.1; }).length;
   var humidHours = profile.rhs.filter(function (v) { return v > 75; }).length;
+  var ingressHours = profile.moistureIngress.filter(function (v) { return v > 0.25; }).length;
+  var naohHours = profile.naohRisk.filter(function (v) { return v > 0.25; }).length;
+  var corrosionHours = profile.corrosionRisk.filter(function (v) { return v > 0.25; }).length;
   setReadouts("climate-readout", [
     { k: "Mean T", v: meanT.toFixed(1) + " °C" },
     { k: "Max T", v: maxT.toFixed(1) + " °C" },
     { k: "Heat Stress hrs", v: String(hsHours) },
     { k: "Cold Plating hrs", v: String(cpHours) },
     { k: "Mean RH", v: mean(profile.rhs).toFixed(0) + "%" },
-    { k: "Humidity hrs", v: String(humidHours) }
+    { k: "Humidity hrs", v: String(humidHours) },
+    { k: "Moisture Ingress hrs", v: String(ingressHours) },
+    { k: "NaOH Proxy hrs", v: String(naohHours) },
+    { k: "Corrosion Proxy hrs", v: String(corrosionHours) }
   ]);
   showToast(profile.name + ": mean " + meanT.toFixed(1) + "°C, " + hsHours + " heat-stress hours.", "ok");
 }
@@ -4218,11 +4485,16 @@ function runClimateCompare() {
       meanRH: mean(p.rhs),
       hsHours: p.heatStress.filter(function (v) { return v > 0.1; }).length,
       cpHours: p.coldPlating.filter(function (v) { return v > 0.1; }).length,
-      humidHours: p.rhs.filter(function (v) { return v > 75; }).length
+      humidHours: p.rhs.filter(function (v) { return v > 75; }).length,
+      ingressHours: p.moistureIngress.filter(function (v) { return v > 0.25; }).length,
+      naohHours: p.naohRisk.filter(function (v) { return v > 0.25; }).length,
+      corrosionHours: p.corrosionRisk.filter(function (v) { return v > 0.25; }).length
     };
   });
   barData.sort(function (a, b) {
-    return (b.hsHours + b.humidHours * 0.45 + b.cpHours * 0.55) - (a.hsHours + a.humidHours * 0.45 + a.cpHours * 0.55);
+    var bScore = b.hsHours + 0.40 * b.humidHours + 0.55 * b.cpHours + 0.35 * b.ingressHours + 0.30 * b.naohHours + 0.30 * b.corrosionHours;
+    var aScore = a.hsHours + 0.40 * a.humidHours + 0.55 * a.cpHours + 0.35 * a.ingressHours + 0.30 * a.naohHours + 0.30 * a.corrosionHours;
+    return bScore - aScore;
   });
   var cv = makeCanvas("climate-compare-chart");
   if (!cv) return;
@@ -4261,17 +4533,19 @@ function runClimateCompare() {
   ctx.fillText("Heat stress hours (red) + cold plating (blue) across India regions", pad.l, 14);
   var byHumidity = barData.slice().sort(function (a, b) { return b.humidHours - a.humidHours; })[0];
   var byCold = barData.slice().sort(function (a, b) { return b.cpHours - a.cpHours; })[0];
+  var byIngress = barData.slice().sort(function (a, b) { return b.ingressHours - a.ingressHours; })[0];
   setReadouts("climate-readout", [
     { k: "Worst heat", v: barData[0].name + " (" + barData[0].hsHours + "h)" },
     { k: "Worst humidity", v: byHumidity.name + " (" + byHumidity.humidHours + "h)" },
     { k: "Worst cold", v: byCold.name + " (" + byCold.cpHours + "h)" },
-    { k: "Method", v: "T + RH + charge stress" }
+    { k: "Worst moisture ingress", v: byIngress.name + " (" + byIngress.ingressHours + "h)" },
+    { k: "Method", v: "T + RH + charge stress + moisture/NaOH/corrosion proxies" }
   ]);
 }
 
 window.addEventListener("DOMContentLoaded", function () {
   setTimeout(function () {
-    animC(document.getElementById("counter-data"), 5091293);
+    animC(document.getElementById("counter-data"), 5462518);
     animC(document.getElementById("counter-models"), 14);
     animC(document.getElementById("counter-cells"), 555);
     animC(document.getElementById("counter-endpoints"), 14);

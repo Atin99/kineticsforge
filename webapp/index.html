@@ -28,7 +28,7 @@
     <a href="#" onclick="navigate('platform')" id="nav-platform">Status</a>
     <a href="#" onclick="navigate('api')" id="nav-api">API</a>
   </div>
-  <div class="nav-status" id="nav-status" title="Live backend health check">
+  <div class="nav-status" id="nav-status" title="Live backend health check (CHECKING -> READY/DEGRADED/OFFLINE)">
     <span class="dot"></span>
     <span id="nav-status-text">CHECKING</span>
   </div>
@@ -53,8 +53,8 @@
     </div>
     <div class="hero-metrics">
       <div class="hero-metric">
-        <div class="val" id="counter-data">5.1M</div>
-        <div class="lbl" title="BatteryLife Na-ion 371K cycling + NASA PCoE 2K impedance + ISU-ILCC 4.9M time-series + UL_PUR 185K summary = 5.09M across 555 cells and 5 datasets">Data Points (5 datasets)</div>
+        <div class="val" id="counter-data">5.46M</div>
+        <div class="lbl" title="BatteryLife Na-ion 371,276 cycling + NASA PCoE 1,956 impedance (with derived EIS summary) + ISU-ILCC 4,904,065 time-series + UL_PUR 185,221 summary = 5,462,518 rows across 555 cells and 4 source datasets">Data Points (4 datasets)</div>
       </div>
       <div class="hero-metric">
         <div class="val" id="counter-models">14</div>
@@ -112,7 +112,7 @@
           <span class="name">Cycles</span>
           <span class="val" id="cycles-val">500</span>
         </div>
-        <div class="range-desc">Total charge-discharge cycles to simulate. The browser mirror advances explicit cycle increments with parabolic SEI growth, Butler-Volmer overpotential, and a bounded residual term.</div>
+        <div class="range-desc">Total charge-discharge cycles to simulate. The browser mirror uses adaptive explicit sub-steps (1-4 per cycle, based on stress) with parabolic SEI growth, Butler-Volmer overpotential, and a bounded residual term.</div>
         <input type="range" id="cycles-slider" min="100" max="2000" value="500" step="50" oninput="updateDiag()">
       </div>
 
@@ -165,13 +165,15 @@
       <div class="formula-box">
         <div class="formula-title">Parameterizable Degradation ODE</div>
         <code>dQ/dN = -Q[ kSEI·d(√N)/dN + kP2·g(SOC,T,JT) + kJT·JT(SOC) + kdes·ln(1+DNa) + kBV·η² + r ]</code>
-        <div class="formula-note" style="font-size:0.62rem;color:#666;margin-top:0.35rem">SEI uses parabolic kinetics d(sqrt(N))/dN = 1/(2sqrt(N)). g(SOC,T,JT) = sigmoid((SOC-SOC*)/0.045) * exp(T stress) * (1+0.35*JT) * dopant suppression; Al mainly suppresses P2-O2, Ti mainly suppresses JT/rate stress. eta = asinh(C-rate/(2*i0_proxy)), where i0_proxy depends on Fe fraction, desolvation barrier, and charge-transfer beta. r is bounded (|r| &lt;= 0.15*total_loss).</div>
+        <div class="formula-note" style="font-size:0.62rem;color:#666;margin-top:0.35rem">SEI uses parabolic kinetics d(sqrt(N))/dN = 1/(2sqrt(N)). g(SOC,T,JT) = sigmoid((SOC-SOC*)/0.045) * exp[-Ea_P2/kB*(1/T-1/Tref)] * (1 + kJT,couple*JT) * exp(-lambdaP2*dopant_frac). Here kJT,couple defaults to 0.35 (calibration baseline, user-editable), Tref=318.15K, lambdaP2={Al:0.58, Ti:0.32, generic:0.42}, and JT-side dopant suppression uses lambdaJT={Al:0.55, Ti:1.05, generic:0.70}. eta = asinh(C-rate/(2*i0_proxy)), where i0_proxy depends on Fe fraction, desolvation barrier, and charge-transfer beta. r is bounded (|r| &lt;= 0.15*total_loss).</div>
         <div class="knob-grid">
           <label>SEI scale<input class="mini-input" id="diag-k-sei" type="number" value="1.00" step="0.05"></label>
           <label>SEI Ea eV<input class="mini-input" id="diag-ea-sei" type="number" value="0.56" step="0.02"></label>
           <label title="Legacy P2-O2 branch weighting is absorbed into this user-settable rate. There is no hidden multiplier.">P2 rate<input class="mini-input" id="diag-p2-k" type="number" value="0.00182" step="0.0001"></label>
+          <label>P2 Ea eV<input class="mini-input" id="diag-ea-p2" type="number" value="0.22" step="0.01"></label>
           <label>P2 SOC*<input class="mini-input" id="diag-p2-soc" type="number" value="0.78" step="0.01"></label>
           <label>JT scale<input class="mini-input" id="diag-jt-scale" type="number" value="1.00" step="0.05"></label>
+          <label title="Couples JT distortion into P2-O2 acceleration inside g(SOC,T,JT).">JT->P2 coupling<input class="mini-input" id="diag-jt-coupling" type="number" value="0.35" step="0.02"></label>
           <label>BV scale<input class="mini-input" id="diag-bv-scale" type="number" value="1.00" step="0.05"></label>
           <label>C-rate power<input class="mini-input" id="diag-stress-exp" type="number" value="0.55" step="0.05"></label>
           <label>Residual scale<input class="mini-input" id="diag-residual-scale" type="number" value="1.00" step="0.05"></label>
@@ -193,12 +195,14 @@
           <button class="btn btn-ghost" onclick="exportDiagnosticsCSV()" type="button">Download CSV</button>
           <button class="btn btn-ghost" onclick="exportDiagnosticsJSON()" type="button">Download JSON</button>
         </div>
+        <div class="plot-note" style="margin-top:0.5rem">Fitting method: bounded coarse-to-fine grid search minimizing mean squared error over all points (overdetermined fit by default: 7 points vs 4 fitted parameters).</div>
         <div class="plot-note" id="diag-cal-result"></div>
         <div class="chart-box" id="diag-cal-chart" style="height:180px;margin-top:0.75rem"></div>
       </div>
 
       <div style="margin-top:1rem">
         <button class="btn btn-primary" onclick="runDiagnostics()" id="btn-run-diag">Run Simulation</button>
+        <button class="btn btn-ghost" onclick="pushDiagnosticsToBms()" type="button" style="margin-left:0.75rem">Push to BMS</button>
       </div>
     </div>
 
@@ -329,7 +333,7 @@
 <section class="section" id="sec-decisions">
   <div class="section-header">
     <h2>Decision Console</h2>
-    <p>One operating queue built from the actual panel outputs: action gates, evidence, owner, and next experiment.</p>
+    <p>One operating queue built from actual panel outputs using explicit local rules: action gates, evidence, owner, and next experiment.</p>
   </div>
 
   <div class="grid-4" style="margin-bottom:1rem">
@@ -343,7 +347,7 @@
     <div class="decision-toolbar">
       <div>
         <div class="panel-title"><span class="indicator"></span> Action Queue</div>
-        <div class="plot-note">Generated locally from current simulation, upload, and recipe state. It does not add hidden validation.</div>
+        <div class="plot-note">Generated locally from current simulation, upload, and recipe state using visible threshold rules. It does not add hidden validation.</div>
       </div>
       <div class="decision-actions">
         <button class="btn btn-ghost" onclick="renderDecisionConsole()" type="button">Refresh</button>
@@ -494,6 +498,7 @@
 
       <div style="margin-top:1rem">
         <button class="btn btn-primary" onclick="runBMS()">Run Pack Simulation</button>
+        <button class="btn btn-ghost" onclick="sendBmsToDecisionQueue()" type="button" style="margin-left:0.75rem">Open Decision Queue</button>
         <button class="btn btn-ghost" onclick="exportBmsCSV()" type="button" style="margin-left:0.75rem">Download CSV</button>
         <button class="btn btn-ghost" onclick="exportBmsJSON()" type="button" style="margin-left:0.5rem">Download JSON</button>
         <button class="btn btn-ghost" onclick="generateReport()" type="button" style="margin-left:0.5rem">📄 Report</button>
@@ -732,7 +737,7 @@
           <label>acid order<input class="mini-input" id="rec-acid-order" type="number" value="0.95" step="0.05"></label>
           <label>Mn Ea J/mol<input class="mini-input" id="rec-ea-mn" type="number" value="27000" step="1000"></label>
         </div>
-        <div class="formula-note" style="font-size:0.62rem;color:#666;margin-top:0.35rem">Particles below roughly 25 um use a mixed surface/diffusion-control correction instead of pure surface-reaction control.</div>
+        <div class="formula-note" style="font-size:0.62rem;color:#666;margin-top:0.35rem">Regime switching is dynamic: a Thiele-like modulus phi = Rp*sqrt(k_surface/D_eff) is recomputed from acid concentration and temperature; phi &gt; 0.3 triggers mixed diffusion-control weighting.</div>
         <div class="knob-grid" style="margin-top:0.7rem">
           <label>acid INR/kg<input class="mini-input" id="rec-acid-cost" type="number" value="8.5" step="0.5"></label>
           <label>energy INR/kWh<input class="mini-input" id="rec-energy-cost" type="number" value="8.0" step="0.5"></label>
@@ -805,7 +810,7 @@
     <div>
       <div class="panel" style="margin-bottom:1rem">
         <div class="panel-title"><span class="indicator"></span> Vehicle Range Estimator</div>
-        <div class="range-desc">Estimate driving range from current SOH, energy density, and vehicle efficiency (WLTP baseline). Motor power limits peak specific power (W/kg); range is energy-limited, acceleration is power-limited.</div>
+        <div class="range-desc">Estimate driving range from current SOH, energy density, and vehicle efficiency (WLTP baseline). The panel reports both energy-limited range and a power-limited range overlay when motor kW is insufficient for sustained cruise demand.</div>
         <div class="knob-grid" style="margin-bottom:0.75rem">
           <label>SOH <input class="mini-input" id="range-soh" type="number" value="1.0" min="0.5" max="1.0" step="0.01"></label>
           <label>Energy Wh/kg <input class="mini-input" id="range-energy" type="number" value="250" min="50" max="600" step="10"></label>
@@ -834,12 +839,14 @@
             </select>
           </label>
           <label>Days <input class="mini-input" id="climate-days" type="number" value="14" min="7" max="365" step="7"></label>
-          <label>Temp Offset (°C) <input class="mini-input" id="climate-temp-offset" type="number" value="0.0" min="-15" max="15" step="0.5"></label>
+          <label>Temp Offset (degC) <input class="mini-input" id="climate-temp-offset" type="number" value="0.0" min="-15" max="15" step="0.5"></label>
           <label>Fast Charge Stress <input class="mini-input" id="climate-charge-stress" type="number" value="1.0" min="1.0" max="3.0" step="0.1"></label>
+          <label>Humidity Bias (%) <input class="mini-input" id="climate-rh-bias" type="number" value="0" min="-20" max="20" step="1"></label>
         </div>
         <div class="chart-box" id="climate-chart" style="height:220px"></div>
         <div class="readout-grid" id="climate-readout"></div>
         <div class="chart-box" id="climate-compare-chart" style="height:180px;margin-top:0.75rem"></div>
+        <div class="plot-note" style="margin-top:0.6rem">Humidity coupling includes three proxy channels: electrolyte moisture ingress, NaOH surface-layer tendency, and current-collector corrosion stress.</div>
         <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap">
           <button class="btn btn-primary" onclick="runClimateStress()" type="button">Run Climate Profile</button>
           <button class="btn btn-ghost" onclick="runClimateCompare()" type="button">Compare All Regions</button>
@@ -866,7 +873,34 @@
       <thead>
         <tr><th>Model</th><th>Type</th><th>Status</th><th>Checkpoint</th><th>Params</th></tr>
       </thead>
-      <tbody></tbody>
+      <tbody>
+        <tr><td style="font-weight:600">M1_CathodeUDE</td><td>UDE physics plus residual</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">45909</td></tr>
+        <tr><td style="font-weight:600">M2_SOH</td><td>MLP regression</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">32737</td></tr>
+        <tr><td style="font-weight:600">M3_CycleLife</td><td>Classifier</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">37156</td></tr>
+        <tr><td style="font-weight:600">M4_FadeRate</td><td>MLP regression</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">7329</td></tr>
+        <tr><td style="font-weight:600">M5_BMS_TGN</td><td>Thermal graph risk</td><td><span class="tag warn">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">11020</td></tr>
+        <tr><td style="font-weight:600">M6_RUL</td><td>MLP regression</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">34753</td></tr>
+        <tr><td style="font-weight:600">M7_Anomaly</td><td>Autoencoder</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">31551</td></tr>
+        <tr><td style="font-weight:600">M8_Joint_SOH_RUL</td><td>Multi-task MLP</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">141907</td></tr>
+        <tr><td style="font-weight:600">M9_KneeDetect</td><td>Conv1D detector</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">219233</td></tr>
+        <tr><td style="font-weight:600">M10_ChemRank</td><td>Embedding ranker</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">7809</td></tr>
+        <tr><td style="font-weight:600">M11_ElectrolyteHealth</td><td>EIS diagnostics</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">8819</td></tr>
+        <tr><td style="font-weight:600">M12_Replenishability</td><td>Recovery preview</td><td><span class="tag warn">Preview</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">9554</td></tr>
+        <tr><td style="font-weight:600">M13_ChemIdentifier</td><td>Early-cycle classifier</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">80552</td></tr>
+        <tr><td style="font-weight:600">M14_FormationProtocol</td><td>Formation quality</td><td><span class="tag warn">Preview</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">19747</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel" style="margin-top:1rem">
+    <div class="panel-title"><span class="indicator"></span> Hardpoints and No-Weights Path</div>
+    <table class="tbl">
+      <thead><tr><th>Model</th><th>Hardpoint</th><th>If Checkpoint Missing</th></tr></thead>
+      <tbody id="hardpoint-table-body">
+        <tr><td>M1_CathodeUDE</td><td>Na-ion ODE (SEI/P2/JT/desolv/BV) + bounded residual gate</td><td>Runs physics mirror only; trained probe heads are omitted.</td></tr>
+        <tr><td>M5_BMS_TGN</td><td>Thermal graph ODE + EIS-derived risk terms + temporal neighbor risk</td><td>Runs deterministic physics-forward proxy (Label Gate).</td></tr>
+        <tr><td>M11-M14 BYOD heads</td><td>Tier-1 feature rules, chemistry heuristics, and formation proxies</td><td>Served as rules-only or preview outputs with explicit tags.</td></tr>
+      </tbody>
     </table>
   </div>
 
@@ -878,6 +912,7 @@
         <tr><td>Static fallback</td><td>14 model cards visible immediately</td><td>Runtime scan updates this table when /api/models responds.</td></tr>
       </tbody>
     </table>
+    <div class="plot-note" style="margin-top:0.6rem">If checkpoints are missing, each model follows its hardpoint fallback path (physics/rules/preview) with explicit confidence limits.</div>
   </div>
 </section>
 
@@ -911,11 +946,12 @@
   </div>
 
   <div class="grid-4" style="margin-bottom:1.5rem">
-    <div class="panel stat"><div class="val">5.09M</div><div class="lbl">Real Data Rows</div></div>
+    <div class="panel stat"><div class="val">5.46M</div><div class="lbl">Real Data Rows</div></div>
     <div class="panel stat"><div class="val">555</div><div class="lbl">Battery Cells Tracked</div></div>
-    <div class="panel stat"><div class="val">11</div><div class="lbl">Dataset Keys</div></div>
+    <div class="panel stat"><div class="val">4</div><div class="lbl">Source Datasets</div></div>
     <div class="panel stat"><div class="val">110</div><div class="lbl">Python Modules</div></div>
   </div>
+  <div class="plot-note" style="margin-top:-0.75rem;margin-bottom:1rem">Health badge states: CHECKING during probe, READY on success, DEGRADED on timeout, OFFLINE on failed health fetch.</div>
 
   <div class="grid-2">
     <div class="panel">
@@ -924,10 +960,9 @@
         <thead><tr><th>Dataset</th><th>Rows</th><th>Type</th><th>Status</th></tr></thead>
         <tbody>
           <tr><td>BatteryLife NA-ion</td><td>371,276</td><td>Cycling</td><td><span class="tag ok">Indexed</span></td></tr>
-          <tr><td>NASA PCoE</td><td>1,956</td><td>Impedance</td><td><span class="tag ok">Indexed</span></td></tr>
+          <tr><td>NASA PCoE</td><td>1,956</td><td>Impedance + derived EIS summary table</td><td><span class="tag ok">Indexed</span></td></tr>
           <tr><td>ISU-ILCC</td><td>4,904,065</td><td>Time-series</td><td><span class="tag ok">Indexed</span></td></tr>
           <tr><td>UL_PUR</td><td>185,221</td><td>Cycle summary</td><td><span class="tag ok">Indexed</span></td></tr>
-          <tr><td>Real impedance summary</td><td>1,956</td><td>EIS-derived table</td><td><span class="tag ok">Indexed</span></td></tr>
         </tbody>
       </table>
       <div class="plot-note">Row-count breadth is reported with cell and dataset counts because ISU-ILCC contributes most high-frequency samples.</div>
