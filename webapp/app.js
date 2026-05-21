@@ -3007,7 +3007,7 @@ function initArchitecture() {
 }
 
 function modelStatusLabel(status, checkpointPresent) {
-  if (!checkpointPresent) return "Missing";
+  if (!checkpointPresent) return "Simulation";
   if (status === "research_preview") return "Preview";
   if (status === "label_gate") return "Label Gate";
   if (status === "trained_checkpoint") return "Trained";
@@ -3015,6 +3015,7 @@ function modelStatusLabel(status, checkpointPresent) {
 }
 
 function modelStatusClass(label) {
+  if (/simulation/i.test(label)) return "sim";
   return /missing|preview|gate/i.test(label) ? "warn" : "ok";
 }
 
