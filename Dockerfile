@@ -22,6 +22,6 @@ COPY modules/ modules/
 COPY checkpoints/ checkpoints/
 
 # .env is NOT copied — secrets are set via platform env vars
-EXPOSE 8000
+EXPOSE 7860
 
 CMD ["python", "serve.py"]
