@@ -3115,8 +3115,9 @@ async function runScreening() {
   var cfg = materialKnobs();
   var selected = materialSelectionFromControls(true);
   setHtml("mat-decision", "<strong>Screening:</strong> computing charge balance, phase stability, fade mechanisms, and local evidence distance...");
-  var selectedProp = null;
-  var items = null;
+  // Always compute browser-side physics first — this NEVER produces NaN
+  var selectedProp = scoreComposition(selected, 318.15, cfg);
+  var items = generateCandidates(selected, cfg);
   var apiSource = "browser fallback";
   try {
     var res = await fetch("/api/screen/cathode", {
@@ -3141,33 +3142,30 @@ async function runScreening() {
     });
     if (!res.ok) throw new Error("screen endpoint returned " + res.status);
     var data = await res.json();
-    selectedProp = apiMaterialToProp(data.predicted || {});
-    items = (data.candidates || []).map(function (it) {
+    var apiProp = apiMaterialToProp(data.predicted || {});
+    // Only use API prop if it has valid numbers for critical fields
+    if (isFinite(apiProp.Q0) && isFinite(apiProp.stability) && isFinite(apiProp.score)) {
+      selectedProp = apiProp;
+    }
+    // Merge API candidates into items for the scatter plot
+    var apiItems = (data.candidates || []).map(function (it) {
       return { comp: apiCompositionToUi(it.composition || {}), prop: apiMaterialToProp(it.properties || {}) };
     });
+    if (apiItems.length > 0) {
+      apiItems.forEach(function (ai) { items.push(ai); });
+    }
     apiSource = "API physics";
   } catch (err) {
-    selectedProp = scoreComposition(selected, 318.15, cfg);
-    items = generateCandidates(selected, cfg);
     showToast("Materials API unavailable; using browser physics fallback.", "info");
     console.warn(err);
   }
   items.push({ comp: selected, prop: selectedProp, selected: true });
   paretoMark(items);
-  drawLatticeSimulation(Object.assign({}, selected, { prop: selectedProp }));
-  drawRadarChart(selectedProp);
-  drawCycleLifeCurve(selectedProp);
-  document.getElementById("mat-cap").textContent = selectedProp.Q0.toFixed(0);
-  document.getElementById("mat-volt").textContent = selectedProp.avgVoltage.toFixed(2) + "V";
-  document.getElementById("mat-stab").textContent = selectedProp.stability.toFixed(2);
-  document.getElementById("mat-jt").textContent = selectedProp.jtIndex.toFixed(2);
-  selectedProp.comp = selected;
-  selectedProp.rawComp = { Mn: selected.rawMn, Fe: selected.rawFe };
-  selectedProp.candidates = items.slice(0, 48).map(function (it) {
-    return { composition: it.comp, score: it.prop.score, capacity: it.prop.Q0, stability: it.prop.stability, fade500: it.prop.fade500 };
-  });
-  selectedProp.apiSource = apiSource;
-  window.__kfMaterials = selectedProp;
+  // ── Draw ALL charts FIRST (before any .toFixed() calls that could throw) ──
+  try { drawLatticeSimulation(Object.assign({}, selected, { prop: selectedProp })); } catch (e) { console.warn("lattice draw error:", e); }
+  try { drawRadarChart(selectedProp); } catch (e) { console.warn("radar draw error:", e); }
+  try { drawCycleLifeCurve(selectedProp); } catch (e) { console.warn("cycle life draw error:", e); }
+  // Scatter plot with animation
   var cv = makeCanvas("mat-chart");
   var pts = items.map(function (it) {
     return { x: it.prop.Q0, y: it.prop.stability, front: it.front, selected: !!it.selected };
@@ -3180,9 +3178,20 @@ async function runScreening() {
     if (n < pts.length) requestAnimationFrame(anim);
   }
   anim();
-  var landscapeItems = generateCandidates(selected, cfg);
-  landscapeItems.push({ comp: selected, prop: selectedProp, selected: true });
-  drawCompositionLandscape(makeCanvas("mat-landscape-chart"), landscapeItems, selected);
+  // Composition landscape — always uses the dense generateCandidates grid
+  drawCompositionLandscape(makeCanvas("mat-landscape-chart"), items, selected);
+  // ── Text readouts (safe even if some fields are NaN) ──
+  document.getElementById("mat-cap").textContent = isFinite(selectedProp.Q0) ? selectedProp.Q0.toFixed(0) : "--";
+  document.getElementById("mat-volt").textContent = isFinite(selectedProp.avgVoltage) ? selectedProp.avgVoltage.toFixed(2) + "V" : "--";
+  document.getElementById("mat-stab").textContent = isFinite(selectedProp.stability) ? selectedProp.stability.toFixed(2) : "--";
+  document.getElementById("mat-jt").textContent = isFinite(selectedProp.jtIndex) ? selectedProp.jtIndex.toFixed(2) : "--";
+  selectedProp.comp = selected;
+  selectedProp.rawComp = { Mn: selected.rawMn, Fe: selected.rawFe };
+  selectedProp.candidates = items.slice(0, 48).map(function (it) {
+    return { composition: it.comp, score: it.prop.score, capacity: it.prop.Q0, stability: it.prop.stability, fade500: it.prop.fade500 };
+  });
+  selectedProp.apiSource = apiSource;
+  window.__kfMaterials = selectedProp;
   var synth = selectedProp.stability > 0.72 && selectedProp.fade500 < 0.16 && selectedProp.chargeRisk < 0.28 && selectedProp.oxygenRisk < 0.46 && Math.abs(selectedProp.siteError || 0) < 0.12;
   var normalizedNote = selected.normalized && Math.abs(selected.normalized.siteError || 0) > 0.02
     ? " Raw TM sliders were normalized before scoring."
