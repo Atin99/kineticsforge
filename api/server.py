@@ -118,6 +118,23 @@ class BMSAlertRequest(BaseModel):
     duration_seconds: int = 3600
 
 
+class UIScreenRequest(BaseModel):
+    na: float = 1.0
+    mn: float = 0.5
+    fe: float = 0.5
+    al_doped: bool = False
+    ti_doped: bool = False
+    temperature_K: float = 318.15
+    upper_voltage: float = 4.10
+    ehull_slope: float = 20.0
+    w_capacity: float = 0.32
+    w_stability: float = 0.32
+    w_fade: float = 0.22
+    w_cost: float = 0.14
+    charge_penalty: float = 0.10
+    defect_penalty: float = 0.06
+
+
 # ---- Endpoints ----
 
 @app.get("/health")
@@ -199,7 +216,7 @@ def predict_lifetime(req: LifetimeRequest):
     comp_dict = req.composition.dict()
     comp_vec = parse_composition(comp_dict).unsqueeze(0)
     model = DegradationVectorField()
-    sim = CathodeDegradationSimulator(model, solver="euler", dt=0.01, max_cycles=min(req.cycles, 1000))
+    sim = CathodeDegradationSimulator(model, solver="rk4", dt=0.01, max_cycles=min(req.cycles, 1000))
     with torch.no_grad():
         result = sim.simulate(comp_vec, T=req.temperature_K, n_cycles=min(req.cycles, 1000))
     fade = float(result["fade_pct"])
@@ -332,6 +349,52 @@ def model_registry_list():
     from core.model_registry import ModelRegistry
     registry = ModelRegistry(PROJECT_ROOT)
     return {"models": registry.summary(), "total": len(registry.summary())}
+
+
+@app.get("/api/models")
+def api_model_registry_list():
+    return model_registry_list()
+
+
+@app.post("/api/predict/degradation")
+def api_predict_degradation(req: LifetimeRequest):
+    return predict_lifetime(req)
+
+
+@app.post("/api/simulate/bms")
+def api_simulate_bms(req: BMSAlertRequest):
+    return alert_bms(req)
+
+
+@app.post("/api/optimize/recycling")
+def api_optimize_recycling(req: RecyclingRequest):
+    return optimize_recycling(req)
+
+
+@app.post("/api/screen/cathode")
+def api_screen_cathode(req: UIScreenRequest):
+    from core.materials_physics import score_composition as score_material_composition, screen_batch
+
+    knobs = {
+        "upper_voltage": req.upper_voltage,
+        "ehull_slope": req.ehull_slope,
+        "w_capacity": req.w_capacity,
+        "w_stability": req.w_stability,
+        "w_fade": req.w_fade,
+        "w_cost": req.w_cost,
+        "charge_penalty": req.charge_penalty,
+        "defect_penalty": req.defect_penalty,
+    }
+    comp = {
+        "Na": req.na,
+        "Mn": req.mn,
+        "Fe": req.fe,
+        "al": req.al_doped,
+        "ti": req.ti_doped,
+    }
+    predicted = score_material_composition(comp, temp_K=req.temperature_K, knobs=knobs)
+    candidates = screen_batch(n=120, temp_K=req.temperature_K, knobs=knobs)[:80]
+    return {"predicted": predicted, "candidates": candidates, "claim": "simulation-backed"}
 
 
 @app.get("/features/catalog")

@@ -116,6 +116,13 @@ body::before {
   animation: pulse-dot 2s ease infinite;
 }
 
+.nav-status.health-ok { color: #22c55e; }
+.nav-status.health-ok .dot { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
+.nav-status.health-warn { color: #ff9f1a; }
+.nav-status.health-warn .dot { background: #ff9f1a; box-shadow: 0 0 8px #ff9f1a; }
+.nav-status.health-bad { color: #ff4444; }
+.nav-status.health-bad .dot { background: #ff4444; box-shadow: 0 0 8px #ff4444; }
+
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
@@ -1355,4 +1362,3 @@ select.mini-input {
 
   .lattice-container canvas { max-width: 100%; height: auto !important; }
 }
-

@@ -88,7 +88,7 @@ class DegradationRequest(BaseModel):
     enable_neural: bool = True
     sei_k_scale: float = 1.0
     sei_ea_ev: float = 0.56
-    p2_rate: float = 0.0028
+    p2_rate: float = 0.00182
     p2_soc_crit: float = 0.78
     jt_scale: float = 1.0
     bv_scale: float = 1.0
@@ -98,6 +98,7 @@ class DegradationRequest(BaseModel):
     mn: float = 0.52
     fe: float = 0.43
     dopant_frac: float = 0.05
+    dopant_type: str = "Al"
 
 
 class BMSRequest(BaseModel):
@@ -112,6 +113,8 @@ class BMSRequest(BaseModel):
     load_scale: float = 1.0
     rct_gate: float = 0.043
     risk_threshold: float = 0.42
+    loss_ratio: float = 6.0
+    topology: str = "4s2p"
     ambient_C: float = 45.0
     seed: Optional[int] = 42
 
@@ -126,6 +129,10 @@ class RecyclingRequest(BaseModel):
     particle_um: float = 50.0
     acid_order: float = 0.95
     mn_ea_j_mol: float = 27000.0
+    acid_cost_inr_kg: float = 8.5
+    energy_cost_inr_kwh: float = 8.0
+    processing_cost_inr_kg: float = 150.0
+    metal_price_inr_kg: float = 620.0
 
 
 class ScreenRequest(BaseModel):
@@ -141,6 +148,8 @@ class ScreenRequest(BaseModel):
     w_stability: float = 0.32
     w_fade: float = 0.22
     w_cost: float = 0.14
+    charge_penalty: float = 0.10
+    defect_penalty: float = 0.06
 
 
 class ChatRequest(BaseModel):
@@ -205,6 +214,7 @@ JT_LOSS_COEFF = 6.5e-3
 DESOLV_LOSS_COEFF = 2.5e-4
 BV_RATE_LOSS_COEFF = 1.2e-4
 RESIDUAL_LOSS_COEFF = 1.0e-5
+RESIDUAL_MAX_FRACTION = 0.15
 RECYCLING_MC_SAMPLES = 200
 
 # In-memory rate limiter for the deployed server
@@ -1028,25 +1038,35 @@ def sigmoid(x: float) -> float:
     return z / (1.0 + z)
 
 
+def dopant_factors(dopant_type: str) -> Dict[str, float]:
+    kind = (dopant_type or "Al").strip().lower()
+    if kind == "ti":
+        return {"jt_suppression": 1.05, "p2_shift": 0.14, "p2_suppression": 0.32, "barrier_drop": 0.075}
+    if kind == "generic":
+        return {"jt_suppression": 0.70, "p2_shift": 0.18, "p2_suppression": 0.42, "barrier_drop": 0.050}
+    return {"jt_suppression": 0.55, "p2_shift": 0.26, "p2_suppression": 0.58, "barrier_drop": 0.035}
+
+
 def na_ion_terms(q: float, soc: float, comp: Dict[str, float], temp_K: float, req: Optional[DegradationRequest] = None) -> Dict[str, float]:
     k_b = 8.617e-5
     sei_scale = clamp(getattr(req, "sei_k_scale", 1.0), 0.0, 10.0)
     sei_ea = clamp(getattr(req, "sei_ea_ev", 0.56), 0.30, 0.95)
-    p2_base = clamp(getattr(req, "p2_rate", 2.8e-3), 0.0, 0.025)
+    p2_base = clamp(getattr(req, "p2_rate", 0.00182), 0.0, 0.025)
     p2_soc_base = clamp(getattr(req, "p2_soc_crit", 0.78), 0.45, 1.05)
     jt_scale = clamp(getattr(req, "jt_scale", 1.0), 0.0, 4.0)
     mn = clamp(comp.get("Mn", 0.52), 0.0, 1.5)
     fe = clamp(comp.get("Fe", 0.43), 0.0, 1.5)
     dop = clamp(comp.get("dopant_frac", 0.05), 0.0, 0.25)
+    dopant = dopant_factors(str(comp.get("dopant_type", getattr(req, "dopant_type", "Al"))))
     jt = clamp(
         mn
         * clamp(1.15 - soc, 0.0, 1.0)
         * math.exp(clamp((temp_K - 298.15) * 0.018, -4.0, 4.0))
-        * math.exp(-0.45 * fe - 0.70 * dop),
+        * math.exp(-0.45 * fe - dopant["jt_suppression"] * dop),
         0.0,
         4.0,
     ) * jt_scale
-    soc_crit = clamp(p2_soc_base - 0.09 * mn + 0.06 * fe + 0.18 * dop, 0.55, 0.95)
+    soc_crit = clamp(p2_soc_base - 0.09 * mn + 0.06 * fe + dopant["p2_shift"] * dop, 0.55, 0.95)
     p2_gate = sigmoid((soc - soc_crit) / 0.045)
     p2o2_rate = clamp(
         p2_base
@@ -1055,10 +1075,15 @@ def na_ion_terms(q: float, soc: float, comp: Dict[str, float], temp_K: float, re
         * (1.0 + 0.35 * jt),
         0.0,
         0.08,
+    ) * math.exp(-dopant["p2_suppression"] * dop)
+    p2o2_rate = clamp(
+        p2o2_rate,
+        0.0,
+        0.08,
     )
     # Na+ desolvation barrier: 0.4-0.6 eV in carbonate electrolytes (Jian et al., Komaba et al.)
     # 0.18 eV is the SEI migration barrier, not desolvation. Corrected to physical range.
-    barrier = 0.50 + 0.025 * mn - 0.014 * fe - 0.050 * dop
+    barrier = 0.50 + 0.025 * mn - 0.014 * fe - dopant["barrier_drop"] * dop
     desolv = clamp(
         math.exp(clamp(barrier / (k_b * temp_K + 1e-10), -2.0, 4.0))
         * (1.0 + 0.25 * max(0.0, soc - 0.85)),
@@ -1075,11 +1100,14 @@ def na_ion_terms(q: float, soc: float, comp: Dict[str, float], temp_K: float, re
 def simulate_degradation(req: DegradationRequest) -> Dict:
     temp_K = req.temperature_C + 273.15
     cycles = int(clamp(req.cycles, 50, 3000))
+    dopant_kind = str(req.dopant_type or "Al").strip().lower()
+    dopant_type = "Ti" if dopant_kind == "ti" else "generic" if dopant_kind == "generic" else "Al"
     comp = {
         "Na": clamp(req.na, 0.60, 1.20),
         "Mn": clamp(req.mn, 0.05, 0.95),
         "Fe": clamp(req.fe, 0.05, 0.95),
         "dopant_frac": clamp(req.dopant_frac, 0.0, 0.25),
+        "dopant_type": dopant_type,
     }
     q = 1.0
     stress = 0.6 + req.c_rate ** clamp(req.stress_exponent, 0.25, 3.0)
@@ -1095,14 +1123,16 @@ def simulate_degradation(req: DegradationRequest) -> Dict:
         scale = GLOBAL_DEGRADATION_SCALE * stress
         sqrt_increment = math.sqrt(i) - math.sqrt(i - 1)
         sei_loss = q * terms["sei_rate"] * SEI_GROWTH_COEFF * sqrt_increment * scale if req.enable_sei else 0.0
-        p2_loss = q * 0.65 * terms["p2o2_rate"] * scale if req.enable_p2o2 else 0.0
+        p2_loss = q * terms["p2o2_rate"] * scale if req.enable_p2o2 else 0.0
         jt_loss = q * JT_LOSS_COEFF * terms["jt"] * scale if req.enable_jt else 0.0
         desolv_loss = q * DESOLV_LOSS_COEFF * math.log1p(terms["desolv"]) * scale
         exchange_proxy = clamp(0.34 + 0.18 * comp["Fe"] - 0.08 * math.log1p(terms["desolv"]) + 0.04 * (1.0 - terms["beta"]), 0.08, 0.90)
         eta = math.asinh(req.c_rate / (2.0 * exchange_proxy))
         rate_stress = 1.0 + 0.20 * max(0.0, req.c_rate - 1.5) ** 2
         rate_loss = q * clamp(req.bv_scale, 0.0, 5.0) * BV_RATE_LOSS_COEFF * eta * eta * rate_stress * scale
-        residual_loss = q * RESIDUAL_LOSS_COEFF * clamp(req.residual_scale, 0.0, 5.0) * sigmoid((i / cycles - 0.62) / 0.16) * (0.8 + 0.35 * req.c_rate) if req.enable_neural else 0.0
+        raw_residual_loss = q * RESIDUAL_LOSS_COEFF * clamp(req.residual_scale, 0.0, 5.0) * sigmoid((i / cycles - 0.62) / 0.16) * (0.8 + 0.35 * req.c_rate) if req.enable_neural else 0.0
+        explicit_loss = sei_loss + p2_loss + jt_loss + desolv_loss + rate_loss
+        residual_loss = min(raw_residual_loss, explicit_loss * RESIDUAL_MAX_FRACTION)
         q = clamp(q - sei_loss - p2_loss - jt_loss - desolv_loss - rate_loss - residual_loss, 0.25, 1.02)
         mechanisms["p2o2"] += p2_loss
         mechanisms["jt"] += jt_loss
@@ -1133,9 +1163,21 @@ def simulate_degradation(req: DegradationRequest) -> Dict:
     }
 
 
-def build_neighbors(n: int) -> List[List[int]]:
-    cols = n if n <= 8 else int(math.ceil(math.sqrt(n * 1.4)))
-    rows = int(math.ceil(n / cols))
+def _topology_info(n: int, mode: str) -> Dict[str, Any]:
+    mode = (mode or "4s2p").lower()
+    parallel = 4 if mode == "2s4p" else 2 if mode == "4s2p" else 1
+    if mode == "grid":
+        parallel = 1
+    parallel = int(max(1, min(parallel, n)))
+    series = int(max(1, math.ceil(n / parallel)))
+    label = f"{n}S1P series string" if mode == "series" else "2S4P current-sharing module" if mode == "2s4p" else "4S2P current-sharing module" if mode == "4s2p" else "thermal grid only"
+    return {"mode": mode, "parallel": parallel, "series": series, "label": label}
+
+
+def build_neighbors(n: int, mode: str = "4s2p") -> Dict[str, Any]:
+    info = _topology_info(n, mode)
+    cols = n if (info["mode"] == "grid" and n <= 8) else int(math.ceil(math.sqrt(n * 1.4))) if info["mode"] == "grid" else info["series"]
+    rows = int(math.ceil(n / cols)) if info["mode"] == "grid" else info["parallel"]
     pos = [(i % cols, i // cols) for i in range(n)]
     neighbors = [[] for _ in range(n)]
     for i in range(n):
@@ -1145,7 +1187,19 @@ def build_neighbors(n: int) -> List[List[int]]:
             if (dx == 1 and dy == 0) or (dx == 0 and dy == 1):
                 neighbors[i].append(j)
                 neighbors[j].append(i)
-    return neighbors
+    return {"neighbors": neighbors, "positions": pos, "cols": cols, "rows": rows, "info": info}
+
+
+def _current_share(topology: Dict[str, Any], r0: np.ndarray, sei: np.ndarray, idx: int) -> float:
+    info = topology.get("info", {})
+    if info.get("parallel", 1) <= 1 or info.get("mode") == "grid":
+        return 1.0
+    positions = topology.get("positions", [])
+    group = positions[idx][0]
+    peers = [i for i, pos in enumerate(positions) if pos[0] == group]
+    inv = [1.0 / max(0.004, float(r0[p] + 0.18 * sei[p])) for p in peers]
+    inv_sum = sum(inv) or 1.0
+    return clamp((inv[peers.index(idx)] / inv_sum) * len(peers), 0.35, 2.4)
 
 
 def _hist_back(hist: List[float], window: int) -> float:
@@ -1162,25 +1216,31 @@ def simulate_bms(req: BMSRequest) -> Dict:
     seed = req.seed if req.seed is not None else 42
     rng = np.random.default_rng(seed)
     fault_cell = int(rng.integers(0, n)) if req.inject_fault else -1
-    neighbors = build_neighbors(n)
+    topology = build_neighbors(n, req.topology)
+    neighbors = topology["neighbors"]
     temp = ambient + rng.normal(0, 0.25, n)
     r0 = 0.033 * (1.0 + rng.normal(0, 0.025, n))
     sei = 0.010 + rng.random(n) * 0.002
     risk = np.zeros(n)
     histories = [[] for _ in range(n)]
     alerts = []
-    threshold = clamp(req.risk_threshold if req.asymmetric_alert else max(req.risk_threshold, 0.55), 0.05, 0.95)
+    base_threshold = clamp(req.risk_threshold, 0.05, 0.95)
+    loss_ratio = max(1.0, float(req.loss_ratio))
+    asym_drop = clamp(math.log(loss_ratio, 2.0) * 0.035, 0.0, 0.18)
+    threshold = clamp(base_threshold - asym_drop, 0.12, 0.95) if req.asymmetric_alert else max(base_threshold, 0.48)
     failure_time = duration * 0.84
     for s in range(steps + 1):
         t = s * dt
         prev = temp.copy()
+        prev_risk = risk.copy()
         raw = np.zeros(n)
         for i in range(n):
             fault_drive = sigmoid((t - duration * 0.46) / max(3.0, duration * 0.07)) ** 2 if i == fault_cell else 0.0
             arrh = math.exp(-0.28 / 8.617e-5 * (1.0 / prev[i] - 1.0 / ambient))
             sei[i] += dt * (1.0e-6 * arrh + fault_drive * 7.0e-5)
             r_int = r0[i] + 0.18 * sei[i] + fault_drive * 0.020
-            q_ohm = clamp(req.load_scale, 0.05, 4.0) * (34.0 * r_int + fault_drive * 14.0)
+            current_share = _current_share(topology, r0, sei, i)
+            q_ohm = clamp(req.load_scale, 0.05, 4.0) * (34.0 * r_int * current_share * current_share + fault_drive * 14.0)
             coupling = sum(clamp(req.edge_k, 0.0, 1.2) * (prev[j] - prev[i]) for j in neighbors[i])
             dtdt = (q_ohm + coupling - clamp(req.cooling_h, 0.0, 0.5) * (prev[i] - ambient)) / max(10.0, req.cth_j_per_k)
             temp[i] = clamp(prev[i] + dt * dtdt, 290.0, 390.0)
@@ -1190,8 +1250,9 @@ def simulate_bms(req: BMSRequest) -> Dict:
             slope_score = sigmoid((dtdt * 60.0 - 1.2) / 0.7)
             eis_score = sigmoid((r_ct + r_sei - clamp(req.rct_gate, 0.005, 0.20)) / 0.009) if req.enable_eis else 0.25 * temp_score
             # Use prev temps for neighbor scoring to avoid cell-ordering artifacts
-            neigh_score = np.mean([sigmoid((prev[j] - 333.15) / 5.0) for j in neighbors[i]]) if neighbors[i] else 0.0
-            raw[i] = clamp(0.34 * temp_score + 0.21 * slope_score + 0.27 * eis_score + 0.18 * neigh_score, 0.0, 1.0)
+            neigh_temp = np.mean([sigmoid((prev[j] - 333.15) / 5.0) for j in neighbors[i]]) if neighbors[i] else 0.0
+            neigh_risk = np.mean([prev_risk[j] for j in neighbors[i]]) if neighbors[i] else 0.0
+            raw[i] = clamp(0.34 * temp_score + 0.21 * slope_score + 0.27 * eis_score + 0.10 * neigh_temp + 0.08 * neigh_risk, 0.0, 1.0)
             histories[i].append(float(raw[i]))
             hist = histories[i]
             lookback = 0.40 * _hist_back(hist, 30) + 0.28 * _hist_back(hist, 60) + 0.20 * _hist_back(hist, 120) + 0.12 * _hist_back(hist, 240)
@@ -1204,6 +1265,9 @@ def simulate_bms(req: BMSRequest) -> Dict:
         "cells": n,
         "fault_cell": fault_cell,
         "seed": seed,
+        "topology": topology["info"],
+        "loss_ratio": round(loss_ratio, 3),
+        "risk_threshold": round(float(threshold), 4),
         "thermal_equation": "Cth dT/dt = q + sum(kij(Tj-Ti)) - h(T-Ta)",
         "final_risks": {f"C{i}": round(float(risk[i]), 4) for i in range(n)},
         "final_temperature_C": {f"C{i}": round(float(temp[i] - 273.15), 2) for i in range(n)},
@@ -1233,6 +1297,32 @@ def shrinking_core(k: float, t_min: float) -> float:
     return clamp(1.0 - (1.0 - kt) ** 3, 0.0, 0.995)
 
 
+def diffusion_core(k: float, t_min: float) -> float:
+    # Product-layer diffusion control: 1 - 2X/3 - (1-X)^(2/3) = kt.
+    target = max(0.0, k * t_min)
+    lo, hi = 0.0, 0.995
+    for _ in range(36):
+        mid = (lo + hi) / 2.0
+        lhs = 1.0 - 2.0 * mid / 3.0 - max(1.0 - mid, 0.0) ** (2.0 / 3.0)
+        if lhs < target:
+            lo = mid
+        else:
+            hi = mid
+    return clamp((lo + hi) / 2.0, 0.0, 0.995)
+
+
+def recovery_conversion(el: Dict[str, Any], acid_molarity: float, temp_K: float, t_min: float, bayesian_update: bool) -> float:
+    temp_factor = math.exp(-el["Ea"] / 8.314 * (1.0 / temp_K - 1.0 / 353.15))
+    k = el["k0"] * acid_molarity ** el["order"] * temp_factor * (50.0 / el["particle"]) ** 0.35
+    surface_x = shrinking_core(k, t_min)
+    diffusion_x = diffusion_core(k * 0.62, t_min)
+    diffusion_weight = clamp((25.0 - el["particle"]) / 18.0, 0.0, 0.75)
+    x = surface_x * (1.0 - diffusion_weight) + diffusion_x * diffusion_weight
+    if bayesian_update and el.get("prior"):
+        x = clamp(0.75 * x + 0.25 * beta_mean(*el["prior"]), 0.0, 0.995)
+    return x
+
+
 def recycling_result(req: RecyclingRequest) -> Dict:
     acid_order = clamp(req.acid_order, 0.1, 2.5)
     particle_um = clamp(req.particle_um, 5.0, 500.0)
@@ -1248,11 +1338,7 @@ def recycling_result(req: RecyclingRequest) -> Dict:
     recoveries = {}
     total = 0.0
     for el in elements:
-        temp_factor = math.exp(-el["Ea"] / 8.314 * (1.0 / temp_K - 1.0 / 353.15))
-        k = el["k0"] * req.acid_molarity ** el["order"] * temp_factor * (50.0 / el["particle"]) ** 0.35
-        x = shrinking_core(k, t_min)
-        if req.bayesian_update and el["prior"]:
-            x = clamp(0.75 * x + 0.25 * beta_mean(*el["prior"]), 0.0, 0.995)
+        x = recovery_conversion(el, req.acid_molarity, temp_K, t_min, req.bayesian_update)
         mass = req.mass_kg * el["wt"] * x
         total += mass
         recoveries[el["n"]] = {"recovery_rate": round(x, 5), "mass_kg": round(mass, 3)}
@@ -1260,29 +1346,41 @@ def recycling_result(req: RecyclingRequest) -> Dict:
     if req.monte_carlo:
         rng = np.random.default_rng(42)
         samples = []
-        rates = np.array([recoveries[el["n"]]["recovery_rate"] for el in elements])
         wts = np.array([el["wt"] for el in elements])
         for _ in range(RECYCLING_MC_SAMPLES):
             feed_noise = np.clip(rng.normal(1.0, 0.08, len(elements)), 0.75, 1.25)
             assay_noise = np.clip(rng.normal(1.0, 0.025, len(elements)), 0.92, 1.08)
-            samples.append(float(np.sum(req.mass_kg * wts * feed_noise * rates * assay_noise)))
+            particle_noise = np.clip(rng.normal(1.0, 0.18, len(elements)), 0.55, 1.65)
+            sample_rates = []
+            for el, pn in zip(elements, particle_noise):
+                sampled = dict(el)
+                sampled["particle"] = max(2.0, sampled["particle"] * float(pn))
+                sample_rates.append(recovery_conversion(sampled, req.acid_molarity, temp_K, t_min, req.bayesian_update))
+            samples.append(float(np.sum(req.mass_kg * wts * feed_noise * np.array(sample_rates) * assay_noise)))
         interval = {"p05_kg": round(float(np.percentile(samples, 5)), 3), "p95_kg": round(float(np.percentile(samples, 95)), 3)}
     acid_kg = req.acid_molarity * 0.098 * req.mass_kg * (t_min / 120.0) ** 0.12
     heat_kwh = max(0.0, req.temperature_C - 25.0) * req.mass_kg * 0.00116
     impurity_penalty = clamp(recoveries["Al"]["recovery_rate"] * 0.28 + recoveries["Cu"]["recovery_rate"] * 0.36, 0.0, 0.8)
     purity_proxy = clamp(0.94 - impurity_penalty * 0.18 + (recoveries["Mn"]["recovery_rate"] + recoveries["Fe"]["recovery_rate"] + recoveries["Na"]["recovery_rate"]) * 0.012, 0.70, 0.98)
-    cost = acid_kg * 8.5 + heat_kwh * 8.0 + req.mass_kg * 150.0
-    margin_proxy = total * 620.0 * purity_proxy - cost
+    cost = acid_kg * max(0.0, req.acid_cost_inr_kg) + heat_kwh * max(0.0, req.energy_cost_inr_kwh) + req.mass_kg * max(0.0, req.processing_cost_inr_kg)
+    metal_price = max(1.0, req.metal_price_inr_kg)
+    margin_proxy = total * metal_price * purity_proxy - cost
     return {
         "feedstock_kg": req.mass_kg,
-        "kinetics": "shrinking-core leaching",
-        "recipe": {"time_min": round(t_min, 2), "particle_um": round(particle_um, 2), "acid_order": round(acid_order, 3)},
+        "kinetics": "shrinking-core leaching with mixed diffusion correction below 25 um",
+        "recipe": {"time_min": round(t_min, 2), "particle_um": round(particle_um, 2), "acid_order": round(acid_order, 3), "regime": "mixed diffusion" if particle_um < 25 else "surface control"},
         "recoveries": recoveries,
         "total_recovered_kg": round(total, 3),
         "uncertainty_interval": interval,
         "product_purity_proxy": round(purity_proxy, 4),
         "margin_proxy_inr": round(margin_proxy, 2),
         "cost_estimate_inr": round(cost, 2),
+        "economics": {
+            "acid_cost_inr_kg": round(req.acid_cost_inr_kg, 3),
+            "energy_cost_inr_kwh": round(req.energy_cost_inr_kwh, 3),
+            "processing_cost_inr_kg": round(req.processing_cost_inr_kg, 3),
+            "metal_price_inr_kg": round(metal_price, 3),
+        },
         "priors": {"Mn": "Beta(8.8,1.2)", "Fe": "Beta(7.2,2.8)", "Na": "Beta(6.5,3.5)"},
     }
 
@@ -1340,6 +1438,8 @@ def api_screen(req: ScreenRequest):
         "w_stability": req.w_stability,
         "w_fade": req.w_fade,
         "w_cost": req.w_cost,
+        "charge_penalty": req.charge_penalty,
+        "defect_penalty": req.defect_penalty,
     }
     predicted = score_composition(comp, temp_K=req.temperature_K, knobs=knobs)
     return {

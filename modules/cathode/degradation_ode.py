@@ -343,7 +343,7 @@ class DegradationVectorField(nn.Module):
 
 
 class CathodeDegradationSimulator:
-    def __init__(self, model, solver='euler', dt=0.01, max_cycles=500):
+    def __init__(self, model, solver='rk4', dt=0.01, max_cycles=500):
         self.model = model
         self.solver = solver
         self.dt = dt

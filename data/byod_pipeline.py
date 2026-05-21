@@ -620,6 +620,7 @@ def _prediction_pack(features: Dict[str, float], mask_by_name: Dict[str, int], c
                 "source": "single_cell_temperature_proxy",
                 "pack_risk_proxy": round(bms_risk_proxy, 4),
                 "requires_pack_geometry": True,
+                "label_gate": True,
             },
             "M6_RUL": {
                 "source": "cycle80_projection",
@@ -667,6 +668,7 @@ def _prediction_pack(features: Dict[str, float], mask_by_name: Dict[str, int], c
                 "life_index": round(formation_life_index, 4),
                 "robustness_index": round(formation_robustness, 4),
                 "sei_quality": round(formation_sei_quality, 4),
+                "research_preview": True,
                 "suggested_protocol": {
                     "formation_c_rate": round(max(0.03, min(0.35, 0.28 - 0.18 * (1.0 - formation_sei_quality))), 3),
                     "rest_time_hours": round(2.0 + 10.0 * (1.0 - formation_sei_quality), 2),

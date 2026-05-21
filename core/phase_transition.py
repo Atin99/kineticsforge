@@ -133,7 +133,7 @@ class NaIonDegradationPhysics(nn.Module):
         self.phase_transition = P2O2PhaseTransition()
         self.desolvation = NaDesolvationBarrier()
         self.sei_scale = nn.Parameter(torch.tensor(1.0))
-        self.phase_capacity_scale = nn.Parameter(torch.tensor(0.65))
+        self.phase_capacity_scale = nn.Parameter(torch.tensor(1.0))
         self.jt_capacity_scale = nn.Parameter(torch.tensor(7.5e-4))
         self.desolvation_capacity_scale = nn.Parameter(torch.tensor(2.5e-4))
         # Nominal capacity in mAh — used to compute I_app from C-rate

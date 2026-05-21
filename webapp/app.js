@@ -156,6 +156,38 @@ function compactNumber(x, d) {
   return n.toFixed(d == null ? 2 : d);
 }
 
+function parseCompactNumber(text) {
+  var raw = String(text || "").trim().toUpperCase();
+  var mul = raw.indexOf("M") >= 0 ? 1000000 : raw.indexOf("K") >= 0 ? 1000 : 1;
+  var n = parseFloat(raw.replace(/[^0-9.\-]/g, ""));
+  return Number.isFinite(n) ? n * mul : 0;
+}
+
+function setNavHealth(state, label) {
+  var wrap = document.getElementById("nav-status");
+  var text = document.getElementById("nav-status-text");
+  if (!wrap || !text) return;
+  wrap.classList.remove("health-ok", "health-warn", "health-bad");
+  wrap.classList.add(state === "ok" ? "health-ok" : state === "warn" ? "health-warn" : "health-bad");
+  text.textContent = label;
+}
+
+function updateNavHealth() {
+  setNavHealth("warn", "CHECKING");
+  fetch("/health", { cache: "no-store" })
+    .then(function (res) {
+      if (!res.ok) throw new Error("health " + res.status);
+      return res.json();
+    })
+    .then(function (data) {
+      var ok = data && (data.status === "ok" || data.status === "operational");
+      setNavHealth(ok ? "ok" : "warn", ok ? "READY" : "WAKING");
+    })
+    .catch(function () {
+      setNavHealth("bad", "OFFLINE");
+    });
+}
+
 function mean(arr) {
   if (!arr || !arr.length) return 0;
   var s = 0;
@@ -295,7 +327,7 @@ function buildDecisionItems() {
         severity: sweepSev,
         source: "BMS Sweep",
         owner: "Pack Safety",
-        evidence: sweep.count + " seeds, alert rate " + (sweep.alertRate * 100).toFixed(1) + "%, mean maxRisk " + sweep.meanRisk.toFixed(3) + " +/- " + sweep.stdRisk.toFixed(3),
+        evidence: sweep.count + " seeds, alert rate " + (sweep.alertRate * 100).toFixed(1) + "%, mean maxRisk " + sweep.meanRisk.toFixed(3) + " +/- " + sweep.stdRisk.toFixed(3) + ", detect " + (sweep.meanDetectionTime == null ? "--" : sweep.meanDetectionTime.toFixed(0) + "s") + ", fault-hit " + (sweep.faultHitRate == null ? "--" : (sweep.faultHitRate * 100).toFixed(0) + "%"),
         action: sweep.alertRate >= 0.7
           ? "This configuration trips frequently across seeds; tighten cooling or reduce thermal stress before policy rollout."
           : sweep.alertRate <= 0.15
@@ -303,7 +335,7 @@ function buildDecisionItems() {
             : "Seed sensitivity is moderate; keep this setup in watch mode and validate against additional pack logs.",
         next: "Run one physical telemetry capture with the same threshold and compare observed alert frequency to this sweep.",
         confidence: sweepConf,
-        confidence_detail: "Seed sweep variability check; higher sigma reduces reliability of one-off seeded runs."
+        confidence_detail: "Seed sweep variability check; includes time-to-detection and non-fault alert share " + ((Number(sweep.nonFaultAlertRate) || 0) * 100).toFixed(0) + "%."
       });
     }
   }
@@ -493,6 +525,75 @@ function exportExperimentTicketsCSV() {
   downloadCSV(rows, "kineticsforge_experiment_tickets.csv");
 }
 
+function valueOf(id) {
+  var el = document.getElementById(id);
+  if (!el) return null;
+  return el.type === "checkbox" ? !!el.checked : el.value;
+}
+
+function setControlValue(id, value) {
+  var el = document.getElementById(id);
+  if (!el || value == null) return;
+  if (el.type === "checkbox") el.checked = !!value;
+  else el.value = value;
+}
+
+function sessionSnapshot() {
+  var ids = [
+    "temp-slider", "crate-slider", "cycles-slider", "diag-na", "diag-mn", "diag-fe", "diag-dop", "diag-dopant-type",
+    "diag-k-sei", "diag-ea-sei", "diag-p2-k", "diag-p2-soc", "diag-jt-scale", "diag-bv-scale", "diag-stress-exp", "diag-residual-scale",
+    "sw-p2o2", "sw-jt", "sw-sei", "sw-neural",
+    "pack-slider", "dur-slider", "bms-topology", "bms-format", "bms-ambient", "bms-cth", "bms-kedge", "bms-cooling", "bms-load", "bms-rct-gate", "bms-risk-thresh", "bms-loss-ratio", "bms-seed", "sw-fault", "sw-eis", "sw-asym",
+    "na-slider", "mn-slider", "fe-slider", "sw-al", "sw-ti", "mat-w-cap", "mat-w-stab", "mat-w-fade", "mat-w-cost", "mat-upper-v", "mat-ehull-slope", "mat-charge-penalty", "mat-defect-penalty",
+    "mass-slider", "acid-slider", "leach-slider", "rec-time", "rec-particle", "rec-acid-order", "rec-mn-ea", "rec-acid-cost", "rec-energy-cost", "rec-processing-cost", "rec-metal-price", "sw-mc", "sw-bayes",
+    "range-soh", "range-energy", "range-mass", "range-eff", "range-target", "range-motor", "climate-region", "climate-days", "climate-temp-offset", "climate-charge-stress"
+  ];
+  var controls = {};
+  ids.forEach(function (id) {
+    var val = valueOf(id);
+    if (val != null) controls[id] = val;
+  });
+  return {
+    format: "kineticsforge_session_v1",
+    generated_at: new Date().toISOString(),
+    controls: controls,
+    run_history: kfRunHistory.slice(0, 40),
+    decisions: buildDecisionItems()
+  };
+}
+
+function saveSessionJSON() {
+  downloadJSON(sessionSnapshot(), "kineticsforge_session.json");
+}
+
+function loadSessionJSONFile(event) {
+  var file = event && event.target && event.target.files ? event.target.files[0] : null;
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function () {
+    try {
+      var data = JSON.parse(String(reader.result || "{}"));
+      var controls = data.controls || {};
+      Object.keys(controls).forEach(function (id) { setControlValue(id, controls[id]); });
+      if (Array.isArray(data.run_history)) {
+        kfRunHistory = data.run_history.slice(0, 40);
+        window.__kfRunHistory = kfRunHistory;
+        saveRunHistory();
+      }
+      updateDiag();
+      updateBMS();
+      updateMat();
+      renderDecisionConsole();
+      showToast("Session controls restored from JSON.", "ok");
+    } catch (err) {
+      showToast("Could not load session JSON.", "warn");
+    } finally {
+      if (event.target) event.target.value = "";
+    }
+  };
+  reader.readAsText(file);
+}
+
 function clearRunHistory() {
   kfRunHistory = [];
   window.__kfRunHistory = kfRunHistory;
@@ -511,10 +612,7 @@ var JT_LOSS_COEFF = 6.5e-3;
 var DESOLV_LOSS_COEFF = 2.5e-4;
 var BV_RATE_LOSS_COEFF = 1.2e-4;
 var RESIDUAL_LOSS_COEFF = 1.0e-5;
-// P2-O2 branching ratio from Lu et al. 2023 (J. Electrochem. Soc. 170, 010527):
-// ~65% of interlayer capacity loss in Mn-rich P2-type Na(Mn,Fe)O2 is attributable
-// to the P2-O2 structural transition above the critical SOC.
-// This factor is now absorbed into the default P2 rate knob value (0.0028 * 0.65 = 0.00182)
+// Legacy fixed P2-O2 branch weighting is absorbed into the default P2 rate knob.
 // so the user can override it by adjusting a single knob without a hidden multiplier.
 var RESIDUAL_MAX_FRACTION = 0.15; // residual can't exceed 15% of total explicit loss
 var RECYCLING_MC_SAMPLES = 200;
@@ -540,10 +638,11 @@ function animC(el, t, d) {
   if (!el) return;
   d = d || 1200;
   var s = performance.now();
+  var startVal = parseCompactNumber(el.textContent);
   var format = t > 9999 ? function (v) { return (v / 1e6).toFixed(1) + "M"; } : function (v) { return Math.round(v).toString(); };
   requestAnimationFrame(function step(n) {
     var p = Math.min((n - s) / d, 1);
-    el.textContent = format(t * (1 - Math.pow(1 - p, 3)));
+    el.textContent = format(startVal + (t - startVal) * (1 - Math.pow(1 - p, 3)));
     if (p < 1) requestAnimationFrame(step);
   });
 }
@@ -707,7 +806,7 @@ function degradationKnobs() {
   return {
     seiScale: num("diag-k-sei", 1.0),
     seiEa: num("diag-ea-sei", 0.56),
-    p2Rate: num("diag-p2-k", 0.00182),  // 0.0028 * 0.65 branching ratio absorbed
+    p2Rate: num("diag-p2-k", 0.00182),
     p2Soc: num("diag-p2-soc", 0.78),
     jtScale: num("diag-jt-scale", 1.0),
     bvScale: num("diag-bv-scale", 1.0),
@@ -716,11 +815,13 @@ function degradationKnobs() {
   };
 }
 function diagnosticComposition() {
+  var dopTypeEl = document.getElementById("diag-dopant-type");
   return {
     Na: clamp(num("diag-na", 1.02), 0.60, 1.20),
     Mn: clamp(num("diag-mn", 0.52), 0.05, 0.95),
     Fe: clamp(num("diag-fe", 0.43), 0.05, 0.95),
-    dopant_frac: clamp(num("diag-dop", 0.05), 0, 0.25)
+    dopant_frac: clamp(num("diag-dop", 0.05), 0, 0.25),
+    dopant_type: dopTypeEl ? dopTypeEl.value : "Al"
   };
 }
 function setDiagnosticComposition(comp) {
@@ -728,7 +829,19 @@ function setDiagnosticComposition(comp) {
     var el = document.getElementById(item[0]);
     if (el && Number.isFinite(item[1])) el.value = Number(item[1]).toFixed(item[0] === "diag-dop" ? 3 : 2);
   });
+  var typeEl = document.getElementById("diag-dopant-type");
+  if (typeEl && comp.dopant_type) typeEl.value = comp.dopant_type;
   updateDiag();
+}
+
+function diagnosticDopantFactors(type) {
+  if (type === "Ti") {
+    return { label: "Ti", jtSuppression: 1.05, p2Shift: 0.14, p2Suppression: 0.32, barrierDrop: 0.075 };
+  }
+  if (type === "generic") {
+    return { label: "generic", jtSuppression: 0.70, p2Shift: 0.18, p2Suppression: 0.42, barrierDrop: 0.050 };
+  }
+  return { label: "Al", jtSuppression: 0.55, p2Shift: 0.26, p2Suppression: 0.58, barrierDrop: 0.035 };
 }
 
 function naIonTerms(state, comp, T, cfg) {
@@ -738,18 +851,19 @@ function naIonTerms(state, comp, T, cfg) {
   var mn = clamp(comp.Mn, 0, 1.5);
   var fe = clamp(comp.Fe, 0, 1.5);
   var dop = clamp(comp.dopant_frac || 0, 0, 0.25);
-  var jt = clamp(cfg.jtScale * mn * clamp(1.15 - soc, 0, 1) * expClamp((T - 298.15) * 0.018, -4, 4) * Math.exp(-0.45 * fe - 0.70 * dop), 0, 4);
-  var socCrit = clamp(cfg.p2Soc - 0.09 * mn + 0.06 * fe + 0.18 * dop, 0.55, 0.95);
+  var dopant = diagnosticDopantFactors(comp.dopant_type);
+  var jt = clamp(cfg.jtScale * mn * clamp(1.15 - soc, 0, 1) * expClamp((T - 298.15) * 0.018, -4, 4) * Math.exp(-0.45 * fe - dopant.jtSuppression * dop), 0, 4);
+  var socCrit = clamp(cfg.p2Soc - 0.09 * mn + 0.06 * fe + dopant.p2Shift * dop, 0.55, 0.95);
   var p2Gate = sigmoid((soc - socCrit) / 0.045);
-  var p2o2Rate = clamp(cfg.p2Rate * p2Gate * expClamp((T - 298.15) * 0.024 / 25, -3, 3) * (1 + 0.35 * jt), 0, 0.08);
+  var p2o2Rate = clamp(cfg.p2Rate * p2Gate * expClamp((T - 298.15) * 0.024 / 25, -3, 3) * (1 + 0.35 * jt) * Math.exp(-dopant.p2Suppression * dop), 0, 0.08);
   // Na+ desolvation barrier: 0.4-0.6 eV (Jian et al., Komaba et al.) — not 0.18 eV (SEI migration)
-  var barrier = 0.50 + 0.025 * mn - 0.014 * fe - 0.050 * dop;
+  var barrier = 0.50 + 0.025 * mn - 0.014 * fe - dopant.barrierDrop * dop;
   var desolv = clamp(Math.exp(clamp(barrier / (kB * T + 1e-10), -2, 4)) * (1 + 0.25 * relu(soc - 0.85)), 0.2, 30);
   var beta = clamp(0.48 - 0.035 * Math.log1p(desolv) + 0.025 * clamp(soc - 0.5, -0.5, 0.5), 0.25, 0.75);
   // Unified SEI: Arrhenius factor normalized to reference T=318.15K
   var seiRef = Math.exp(-cfg.seiEa / (kB * SEI_REF_TEMP));
   var seiArrhenius = cfg.seiScale * Math.exp(-cfg.seiEa / (kB * T)) / Math.max(seiRef, 1e-30);
-  return { jt: jt, p2o2Rate: p2o2Rate, desolv: desolv, beta: beta, seiRate: seiArrhenius, socCrit: socCrit };
+  return { jt: jt, p2o2Rate: p2o2Rate, desolv: desolv, beta: beta, seiRate: seiArrhenius, socCrit: socCrit, dopant: dopant.label };
 }
 
 function simulateDegradation(options) {
@@ -934,8 +1048,8 @@ function calibrationError(curve, data) {
 function calibrateDiagnostics() {
   var data = parseCalibrationData();
   var result = document.getElementById("diag-cal-result");
-  if (data.length < 3) {
-    if (result) result.textContent = "Need at least 3 rows: cycle, capacity_fraction_or_percent.";
+  if (data.length < 5) {
+    if (result) result.textContent = "Need at least 5 rows for four fitted parameters: cycle, capacity_fraction_or_percent.";
     return;
   }
   var baseCfg = degradationKnobs();
@@ -1110,7 +1224,9 @@ function exportBmsJSON() {
       n_cells: sim.n,
       duration_s: sim.duration,
       seed: sim.seed,
-      fault_cell: sim.faultCell
+      fault_cell: sim.faultCell,
+      topology: sim.topology,
+      loss_ratio: sim.lossRatio
     },
     alerts: sim.alerts || [],
     max_risk: sim.maxRisk,
@@ -1165,11 +1281,12 @@ function exportRecyclingJSON() {
       acid_molarity: rec.acid,
       temperature_C: rec.tempC,
       leach_time_min: rec.leachMin,
-      particle_um: rec.particleUm
+      particle_um: rec.particleUm,
+      economics_inr: rec.economics || {}
     },
     recoveries: {},
     total_recovered_kg: rec.totalRecovered,
-    uncertainty_interval: rec.interval,
+    uncertainty_interval: { p05_kg: rec.lo, p95_kg: rec.hi },
     purity_proxy: rec.purity,
     margin_proxy_inr: rec.margin,
     cost_estimate_inr: rec.cost
@@ -1210,7 +1327,7 @@ function renderFormationScore(data) {
       + '<div style="background:#1a1a1a;border-radius:4px;height:10px;overflow:hidden"><div style="height:100%;border-radius:4px;width:' + pct + '%;background:' + color + ';transition:width 0.6s ease"></div></div>'
       + '<div style="font-size:0.7rem;color:#aaa;margin-top:2px">' + pct + '%</div></div>';
   }
-  var html = '<div class="panel-title"><span class="indicator"></span> Formation Efficiency</div>';
+  var html = '<div class="panel-title"><span class="indicator"></span> Formation Efficiency <span class="tag warn" style="margin-left:0.5rem">Research Preview</span></div>';
   html += '<div style="display:flex;gap:1.5rem;flex-wrap:wrap;align-items:flex-start">';
   html += '<div style="flex:1;min-width:180px">';
   html += gauge(seiQ, "SEI Quality");
@@ -1228,6 +1345,7 @@ function renderFormationScore(data) {
     html += '</div>';
   }
   html += '</div></div>';
+  html += '<div class="plot-note" style="margin-top:0.6rem">M14 FormationProtocol is a preview output; validate against formation experiments before using it as a production recipe.</div>';
   container.innerHTML = html;
 }
 
@@ -1379,9 +1497,12 @@ function renderBYOD(data) {
     var desc = Object.keys(m).filter(function (k) { return k !== "source" && k !== "checkpoint_source" && k !== "suggested_protocol" && k !== "research_preview"; }).map(function (k) {
       return k + "=" + (typeof m[k] === "number" ? fmtFeatureValue(m[k]) : m[k]);
     }).join(", ");
-    var hasCheckpoint = m.checkpoint_source === "trained_forward";
-    var tag = hasCheckpoint ? "ok" : (m.research_preview ? "warn" : "ok");
-    return '<div class="switch-row"><div class="switch-label"><span class="name">' + escapeHtml(id) + '</span><span class="desc">' + escapeHtml(desc) + '</span></div><span class="tag ' + tag + '">' + escapeHtml(hasCheckpoint ? "trained forward" : (m.source || "derived")) + "</span></div>";
+    var preview = !!m.research_preview || id === "M12_Replenishability" || id === "M14_FormationProtocol";
+    var labelGate = id === "M5_BMS_TGN";
+    var hasCheckpoint = m.checkpoint_source === "trained_forward" && !preview && !labelGate;
+    var tag = (preview || labelGate) ? "warn" : (hasCheckpoint ? "ok" : "ok");
+    var label = preview ? "Research Preview" : labelGate ? "Label Gate" : (hasCheckpoint ? "trained forward" : (m.source || "derived"));
+    return '<div class="switch-row"><div class="switch-label"><span class="name">' + escapeHtml(id) + '</span><span class="desc">' + escapeHtml(desc) + '</span></div><span class="tag ' + tag + '">' + escapeHtml(label) + "</span></div>";
   }).join("");
   setHtml("byod-model-output", modelRows || '<div class="switch-row"><div class="switch-label"><span class="name">No outputs</span><span class="desc">Feature extraction did not produce enough inputs.</span></div><span class="tag warn">Low data</span></div>');
   var chem = models.M13_ChemIdentifier ? models.M13_ChemIdentifier.predicted_family : "unknown";
@@ -1602,24 +1723,38 @@ function exportBYODJSON() {
 
 function testMaterialInDiagnostics() {
   var mat = window.__kfMaterials || {};
-  var norm = mat.normalized || normalizeMaterialComposition({
-    Na: parseFloat(document.getElementById("na-slider").value),
-    Mn: parseFloat(document.getElementById("mn-slider").value),
-    Fe: parseFloat(document.getElementById("fe-slider").value),
-    al: document.getElementById("sw-al").checked,
-    ti: document.getElementById("sw-ti").checked
-  });
+  var norm = mat.normalized || normalizeMaterialComposition(materialSelectionFromControls(false));
   var dopants = norm.dopants || norm;
   var dopFrac = Number(dopants.Al || 0) + Number(dopants.Ti || 0);
   var comp = {
     Na: Number(norm.Na != null ? norm.Na : parseFloat(document.getElementById("na-slider").value)),
     Mn: Number(norm.Mn != null ? norm.Mn : parseFloat(document.getElementById("mn-slider").value)),
     Fe: Number(norm.Fe != null ? norm.Fe : parseFloat(document.getElementById("fe-slider").value)),
-    dopant_frac: dopFrac
+    dopant_frac: dopFrac,
+    dopant_type: Number(dopants.Ti || 0) > Number(dopants.Al || 0) ? "Ti" : (dopFrac > 0 ? "Al" : "generic")
   };
   setDiagnosticComposition(comp);
   navigate("diagnostics");
   runDiagnostics();
+}
+
+function loadDiagnosticsInMaterials() {
+  var comp = diagnosticComposition();
+  var dop = clamp(Number(comp.dopant_frac) || 0, 0, 0.18);
+  var mn = clamp(Number(comp.Mn), 0.1, 0.9);
+  var fe = clamp(Number(comp.Fe), 0.1, 0.9);
+  var naEl = document.getElementById("na-slider");
+  var mnEl = document.getElementById("mn-slider");
+  var feEl = document.getElementById("fe-slider");
+  var alEl = document.getElementById("sw-al");
+  var tiEl = document.getElementById("sw-ti");
+  if (naEl) naEl.value = clamp(Number(comp.Na), 0.6, 1.2).toFixed(2);
+  if (mnEl) mnEl.value = mn.toFixed(2);
+  if (feEl) feEl.value = fe.toFixed(2);
+  if (alEl) alEl.checked = dop > 0 && comp.dopant_type !== "Ti";
+  if (tiEl) tiEl.checked = dop > 0 && comp.dopant_type === "Ti";
+  updateMat();
+  showToast("Diagnostics composition loaded into Materials with dopant species preserved.", "ok");
 }
 
 function drawDegradationSurface(cv, out) {
@@ -1682,13 +1817,28 @@ function drawDegradationSurface(cv, out) {
 }
 
 // BMS thermal graph simulation
-function buildTopology(n) {
-  var cols = n <= 8 ? n : Math.ceil(Math.sqrt(n * 1.4));
-  var rows = Math.ceil(n / cols);
+function bmsTopologyInfo(n, mode) {
+  mode = mode || (document.getElementById("bms-topology") ? document.getElementById("bms-topology").value : "4s2p");
+  var parallel = mode === "2s4p" ? 4 : mode === "4s2p" ? 2 : 1;
+  if (mode === "grid") parallel = 1;
+  parallel = Math.max(1, Math.min(parallel, n));
+  var series = Math.max(1, Math.ceil(n / parallel));
+  return {
+    mode: mode,
+    parallel: parallel,
+    series: series,
+    label: mode === "series" ? n + "S1P series string" : mode === "2s4p" ? "2S4P current-sharing module" : mode === "4s2p" ? "4S2P current-sharing module" : "thermal grid only"
+  };
+}
+
+function buildTopology(n, mode) {
+  var info = bmsTopologyInfo(n, mode);
+  var cols = info.mode === "grid" ? (n <= 8 ? n : Math.ceil(Math.sqrt(n * 1.4))) : info.series;
+  var rows = info.mode === "grid" ? Math.ceil(n / cols) : info.parallel;
   var pos = [];
   var edges = [];
   var nbr = Array.from({ length: n }, function () { return []; });
-  for (var i = 0; i < n; i++) pos.push({ x: i % cols, y: Math.floor(i / cols) });
+  for (var i = 0; i < n; i++) pos.push({ x: i % cols, y: Math.floor(i / cols), group: i % cols });
   for (var a = 0; a < n; a++) {
     for (var b = a + 1; b < n; b++) {
       var dx = Math.abs(pos[a].x - pos[b].x), dy = Math.abs(pos[a].y - pos[b].y);
@@ -1699,18 +1849,23 @@ function buildTopology(n) {
       }
     }
   }
-  return { cols: cols, rows: rows, pos: pos, edges: edges, neighbors: nbr };
+  return { cols: cols, rows: rows, pos: pos, edges: edges, neighbors: nbr, info: info };
 }
 
 function bmsKnobs(useAsym) {
+  var baseThreshold = num("bms-risk-thresh", 0.42);
+  var lossRatio = Math.max(1, num("bms-loss-ratio", 6.0));
+  var asymDrop = clamp(Math.log(lossRatio) / Math.log(2) * 0.035, 0, 0.18);
   return {
     cth: Math.max(10, num("bms-cth", 95)),
     kedge: Math.max(0, num("bms-kedge", 0.18)),
     cooling: Math.max(0, num("bms-cool", 0.045)),
     load: Math.max(0.05, num("bms-load", 1.0)),
     rctGate: Math.max(0.001, num("bms-rct-gate", 0.043)),
-    threshold: useAsym ? num("bms-risk-thresh", 0.42) : Math.max(0.48, num("bms-risk-thresh", 0.55)),
-    ambient: num("bms-ambient", 45) + 273.15
+    lossRatio: lossRatio,
+    threshold: useAsym ? clamp(baseThreshold - asymDrop, 0.12, 0.95) : Math.max(0.48, baseThreshold),
+    ambient: num("bms-ambient", 45) + 273.15,
+    topologyMode: document.getElementById("bms-topology") ? document.getElementById("bms-topology").value : "4s2p"
   };
 }
 
@@ -1728,13 +1883,32 @@ function bmsScenarioKey(n, duration, fault, eis, asym, ambient, knobs) {
     Number(knobs.cooling).toFixed(4),
     Number(knobs.load).toFixed(4),
     Number(knobs.rctGate).toFixed(4),
-    Number(knobs.threshold).toFixed(4)
+    Number(knobs.threshold).toFixed(4),
+    Number(knobs.lossRatio).toFixed(2),
+    knobs.topologyMode || "4s2p"
   ].join("|");
 }
 
+function bmsCurrentShare(topology, cells, idx) {
+  var info = topology.info || {};
+  if (!info.parallel || info.parallel <= 1 || info.mode === "grid") return 1.0;
+  var group = topology.pos[idx].group;
+  var peers = [];
+  for (var i = 0; i < topology.pos.length; i++) {
+    if (topology.pos[i].group === group) peers.push(i);
+  }
+  var inv = peers.map(function (p) {
+    var c = cells[p];
+    return 1 / Math.max(0.004, c.r0 + 0.18 * c.sei);
+  });
+  var invSum = inv.reduce(function (a, b) { return a + b; }, 0);
+  var own = inv[peers.indexOf(idx)] || 0;
+  return clamp((own / Math.max(invSum, 1e-9)) * peers.length, 0.35, 2.4);
+}
+
 function simulateBmsPhysics(n, duration, injectFault, useEis, useAsym, seed) {
-  var topology = buildTopology(n);
   var cfg = bmsKnobs(useAsym);
+  var topology = buildTopology(n, cfg.topologyMode);
   var steps = clamp(Math.round(duration), 60, 240);
   var dt = duration / steps;
   var ambient = cfg.ambient;
@@ -1758,6 +1932,7 @@ function simulateBmsPhysics(n, duration, injectFault, useEis, useAsym, seed) {
   for (var s = 0; s <= steps; s++) {
     var t = s * dt;
     var prevT = cells.map(function (c) { return c.T; });
+    var prevRisk = cells.map(function (c) { return c.risk || 0; });
     var raw = [];
     for (var c = 0; c < n; c++) {
       var cell = cells[c];
@@ -1766,7 +1941,8 @@ function simulateBmsPhysics(n, duration, injectFault, useEis, useAsym, seed) {
       var arrh = Math.exp(-0.28 / (8.617e-5) * (1 / cell.T - 1 / ambient));
       cell.sei += dt * (1.0e-6 * arrh + faultDrive * 7.0e-5);
       var rInt = cell.r0 + 0.18 * cell.sei + faultDrive * 0.020;
-      var qOhm = cfg.load * (34 * rInt + faultDrive * 14.0);
+      var currentShare = bmsCurrentShare(topology, cells, c);
+      var qOhm = cfg.load * (34 * rInt * currentShare * currentShare + faultDrive * 14.0);
       var coupling = 0;
       topology.neighbors[c].forEach(function (j) { coupling += cfg.kedge * (prevT[j] - prevT[c]); });
       var dTdt = (qOhm + coupling - cfg.cooling * (prevT[c] - ambient)) / cfg.cth;
@@ -1781,9 +1957,12 @@ function simulateBmsPhysics(n, duration, injectFault, useEis, useAsym, seed) {
       var eisScore = useEis ? sigmoid((rCt + rSei - cfg.rctGate) / 0.009) : 0.25 * tempScore;
       // Use prevT for neighbor score to avoid cell-ordering artifacts
       var neighborTemp = 0;
+      var neighborRiskPrev = 0;
       topology.neighbors[c].forEach(function (j) { neighborTemp += sigmoid((prevT[j] - 273.15 - 60) / 5.0); });
+      topology.neighbors[c].forEach(function (j) { neighborRiskPrev += prevRisk[j] || 0; });
       neighborTemp = topology.neighbors[c].length ? neighborTemp / topology.neighbors[c].length : 0;
-      raw[c] = clamp(0.34 * tempScore + 0.21 * slopeScore + 0.27 * eisScore + 0.18 * neighborTemp, 0, 1);
+      neighborRiskPrev = topology.neighbors[c].length ? neighborRiskPrev / topology.neighbors[c].length : 0;
+      raw[c] = clamp(0.34 * tempScore + 0.21 * slopeScore + 0.27 * eisScore + 0.10 * neighborTemp + 0.08 * neighborRiskPrev, 0, 1);
       cell.rawHist.push(raw[c]);
       var h = cell.rawHist;
       var lookback = 0.40 * _histBack(h, 30) + 0.28 * _histBack(h, 60) + 0.20 * _histBack(h, 120) + 0.12 * _histBack(h, 240);
@@ -1805,7 +1984,7 @@ function simulateBmsPhysics(n, duration, injectFault, useEis, useAsym, seed) {
     frames.push({ t: t, risks: risks.slice(), temps: temps.slice(), slopes: slopes.slice(), rcts: rcts.slice(), rseis: rseis.slice(), maxRisk: maxRisk, maxCell: maxCell });
   }
   var finalFrame = frames[frames.length - 1] || {};
-  return { topology: topology, frames: frames, alerts: alerts, faultCell: faultCell, threshold: threshold, seed: seed != null ? seed : 42, maxRisk: finalFrame.maxRisk, maxCell: finalFrame.maxCell };
+  return { topology: topology, frames: frames, alerts: alerts, faultCell: faultCell, threshold: threshold, lossRatio: cfg.lossRatio, seed: seed != null ? seed : 42, maxRisk: finalFrame.maxRisk, maxCell: finalFrame.maxCell };
 }
 
 // Lookback window average helper (extracted from inner function to avoid closure-in-loop)
@@ -1878,11 +2057,36 @@ function drawBmsThermal(cv, sim, frame) {
   ctx.fillText("Thermal coupling: Cth dT/dt = q + sum(kij(Tj-Ti)) - h(T-Ta)", 12, 14);
 }
 
+function applyBmsFormatDefaults() {
+  var fmtEl = document.getElementById("bms-format");
+  var cthEl = document.getElementById("bms-cth");
+  var kEl = document.getElementById("bms-kedge");
+  if (!fmtEl || !cthEl) return;
+  var fmt = fmtEl.value;
+  if (fmt === "18650") {
+    cthEl.value = "65";
+    if (kEl) kEl.value = "0.10";
+  } else if (fmt === "prismatic") {
+    cthEl.value = "1200";
+    if (kEl) kEl.value = "0.36";
+  } else {
+    cthEl.value = "95";
+    if (kEl) kEl.value = "0.18";
+  }
+  updateBMS();
+}
+
 function updateBMS() {
   document.getElementById("pack-val").textContent = document.getElementById("pack-slider").value + " cells";
   document.getElementById("dur-val").textContent = document.getElementById("dur-slider").value + "s";
   var amb = document.getElementById("bms-ambient-val");
   if (amb) amb.textContent = num("bms-ambient", 45).toFixed(0) + " C";
+  var topoNote = document.getElementById("bms-topology-note");
+  if (topoNote) {
+    var n = parseInt(document.getElementById("pack-slider").value, 10) || 8;
+    var info = bmsTopologyInfo(n);
+    topoNote.textContent = info.label + ": neighbor terms use previous-timestep heat and risk, avoiding algebraic circularity. Asymmetric gate uses FN/FP cost " + Math.max(1, num("bms-loss-ratio", 6.0)).toFixed(1) + "x.";
+  }
 }
 
 function runBMS() {
@@ -1908,12 +2112,14 @@ function runBMS() {
     ambient_C: ambientC,
     seed: seed,
     maxRisk: sim.maxRisk,
+    topology: sim.topology.info,
+    lossRatio: sim.lossRatio,
     scenarioKey: scenarioKey
   };
   var sweepNote = document.getElementById("bms-sweep-note");
   if (sweepNote) {
     if (window.__kfBmsSweep && window.__kfBmsSweep.scenarioKey === scenarioKey) {
-      sweepNote.textContent = "Sweep " + window.__kfBmsSweep.count + " seeds: alert rate " + Math.round(window.__kfBmsSweep.alertRate * 100) + "%, mean max-risk " + window.__kfBmsSweep.meanRisk.toFixed(3) + " +/- " + window.__kfBmsSweep.stdRisk.toFixed(3) + ".";
+      sweepNote.textContent = "Sweep " + window.__kfBmsSweep.count + " seeds: alert rate " + Math.round(window.__kfBmsSweep.alertRate * 100) + "%, mean max-risk " + window.__kfBmsSweep.meanRisk.toFixed(3) + " +/- " + window.__kfBmsSweep.stdRisk.toFixed(3) + ", mean detect " + (window.__kfBmsSweep.meanDetectionTime == null ? "--" : window.__kfBmsSweep.meanDetectionTime.toFixed(0) + "s") + ", fault-hit " + (window.__kfBmsSweep.faultHitRate == null ? "--" : Math.round(window.__kfBmsSweep.faultHitRate * 100) + "%") + ".";
     } else {
       sweepNote.textContent = "Run a seed sweep to quantify how sensitive this setup is to stochastic initialization.";
     }
@@ -1930,7 +2136,7 @@ function runBMS() {
     grid.appendChild(d);
   }
   var log = document.getElementById("bms-log");
-  log.innerHTML = '<div class="cmd">$ bms --thermal-ode --cells=' + n + " --fault=" + (sim.faultCell >= 0 ? "C" + sim.faultCell : "none") + ' --seed=' + seed + '</div><div class="info">Pack graph built with ' + sim.topology.edges.length + " thermal edges. Ambient=" + ambientC.toFixed(0) + " C EIS=" + (eis ? "on" : "off") + " threshold=" + sim.threshold.toFixed(2) + " seed=" + seed + "</div>";
+  log.innerHTML = '<div class="cmd">$ bms --thermal-ode --cells=' + n + " --topology=" + escapeHtml(sim.topology.info.label) + " --fault=" + (sim.faultCell >= 0 ? "C" + sim.faultCell : "none") + ' --seed=' + seed + '</div><div class="info">Pack graph built with ' + sim.topology.edges.length + " thermal edges. Ambient=" + ambientC.toFixed(0) + " C EIS=" + (eis ? "on" : "off") + " threshold=" + sim.threshold.toFixed(2) + " FN/FP=" + sim.lossRatio.toFixed(1) + " seed=" + seed + "</div>";
   var cv = makeCanvas("bms-thermal-chart");
   var trendCv = makeCanvas("bms-trend-chart");
   var idx = 0;
@@ -1976,7 +2182,9 @@ function runBMS() {
         { k: "Highest cell", v: "C" + frame.maxCell },
         { k: "Risk / gate", v: frame.maxRisk.toFixed(3) + " / " + sim.threshold.toFixed(2) },
         { k: "Tmax", v: Math.max.apply(null, frame.temps).toFixed(1) + " C" },
-        { k: "Rct + RSEI", v: (frame.rcts[frame.maxCell] + frame.rseis[frame.maxCell]).toFixed(3) + " ohm" }
+        { k: "Rct + RSEI", v: (frame.rcts[frame.maxCell] + frame.rseis[frame.maxCell]).toFixed(3) + " ohm" },
+        { k: "Topology", v: sim.topology.info.label },
+        { k: "FN/FP cost", v: sim.lossRatio.toFixed(1) + "x" }
       ]);
       renderConfidence("bms-confidence", bmsConf.confidence, bmsConf.detail);
       recordRun("bms", {
@@ -2009,6 +2217,9 @@ function runBmsSweep() {
   var tmaxs = [];
   var maxCells = {};
   var alerts = 0;
+  var detectionTimes = [];
+  var correctFaultHits = 0;
+  var nonFaultAlerts = 0;
   for (var i = 0; i < sweepCount; i++) {
     var sim = simulateBmsPhysics(n, dur, fault, eis, asym, seedBase + i);
     var frame = sim.frames[sim.frames.length - 1];
@@ -2018,7 +2229,13 @@ function runBmsSweep() {
     maxRisks.push(maxRisk);
     tmaxs.push(Math.max.apply(null, frame.temps));
     maxCells[frame.maxCell] = (maxCells[frame.maxCell] || 0) + 1;
-    if (maxRisk > sim.threshold) alerts += 1;
+    var firstAlert = (sim.frames || []).find(function (f) { return f.maxRisk > sim.threshold; });
+    if (firstAlert) {
+      alerts += 1;
+      detectionTimes.push(firstAlert.t);
+      if (sim.faultCell >= 0 && firstAlert.maxCell === sim.faultCell) correctFaultHits += 1;
+      if (sim.faultCell < 0 || firstAlert.maxCell !== sim.faultCell) nonFaultAlerts += 1;
+    }
   }
   if (!maxRisks.length) {
     showToast("Sweep failed to produce any frames.", "warn");
@@ -2031,6 +2248,9 @@ function runBmsSweep() {
   var stdRisk = stddev(maxRisks);
   var alertRate = alerts / maxRisks.length;
   var meanTmax = mean(tmaxs);
+  var meanDetect = detectionTimes.length ? mean(detectionTimes) : null;
+  var faultHitRate = alerts ? correctFaultHits / alerts : null;
+  var nonFaultAlertRate = alerts ? nonFaultAlerts / alerts : 0;
   window.__kfBmsSweep = {
     scenarioKey: scenarioKey,
     count: maxRisks.length,
@@ -2040,16 +2260,19 @@ function runBmsSweep() {
     stdRisk: stdRisk,
     alertRate: alertRate,
     meanTmax: meanTmax,
+    meanDetectionTime: meanDetect,
+    faultHitRate: faultHitRate,
+    nonFaultAlertRate: nonFaultAlertRate,
     dominantCell: dominantCell ? dominantCell.cell : null
   };
 
   var note = document.getElementById("bms-sweep-note");
   if (note) {
-    note.textContent = "Sweep " + maxRisks.length + " seeds: alert rate " + Math.round(alertRate * 100) + "%, mean max-risk " + meanRisk.toFixed(3) + " \u00B1 " + stdRisk.toFixed(3) + ", dominant cell C" + (dominantCell ? dominantCell.cell : "--") + ".";
+    note.textContent = "Sweep " + maxRisks.length + " seeds: alert rate " + Math.round(alertRate * 100) + "%, mean max-risk " + meanRisk.toFixed(3) + " +/- " + stdRisk.toFixed(3) + ", mean detect " + (meanDetect == null ? "--" : meanDetect.toFixed(0) + "s") + ", fault-hit " + (faultHitRate == null ? "--" : Math.round(faultHitRate * 100) + "%") + ", non-fault alerts " + Math.round(nonFaultAlertRate * 100) + "%.";
   }
   var log = document.getElementById("bms-log");
   if (log) {
-    log.innerHTML += '<div class="info">Sweep seeds ' + seedBase + "-" + (seedBase + maxRisks.length - 1) + ": alert rate " + (alertRate * 100).toFixed(1) + "%, mean maxRisk " + meanRisk.toFixed(3) + ", sigma " + stdRisk.toFixed(3) + ", dominant C" + (dominantCell ? dominantCell.cell : "--") + ".</div>";
+    log.innerHTML += '<div class="info">Sweep seeds ' + seedBase + "-" + (seedBase + maxRisks.length - 1) + ": alert rate " + (alertRate * 100).toFixed(1) + "%, mean maxRisk " + meanRisk.toFixed(3) + ", detect " + (meanDetect == null ? "--" : meanDetect.toFixed(0) + "s") + ", fault-hit " + (faultHitRate == null ? "--" : (faultHitRate * 100).toFixed(0) + "%") + ", non-fault alerts " + (nonFaultAlertRate * 100).toFixed(0) + "%.</div>";
     log.scrollTop = log.scrollHeight;
   }
 
@@ -2060,8 +2283,8 @@ function runBmsSweep() {
   }
   var sweepConf = clamp(0.74 - stdRisk * 1.8 - Math.abs(alertRate - 0.5) * 0.10, 0.26, 0.86);
   recordRun("bms_sweep", {
-    summary: maxRisks.length + " seeds, alert rate " + (alertRate * 100).toFixed(1) + "%, dominant C" + (dominantCell ? dominantCell.cell : "--"),
-    key_metric: "mean risk " + meanRisk.toFixed(3) + " +/- " + stdRisk.toFixed(3),
+    summary: maxRisks.length + " seeds, alert rate " + (alertRate * 100).toFixed(1) + "%, fault-hit " + (faultHitRate == null ? "--" : (faultHitRate * 100).toFixed(0) + "%"),
+    key_metric: "mean detect " + (meanDetect == null ? "--" : meanDetect.toFixed(0) + "s"),
     confidence: sweepConf
   });
 }
@@ -2083,7 +2306,9 @@ function materialKnobs() {
     wFade: num("mat-w-fade", 0.22),
     wCost: num("mat-w-cost", 0.14),
     upperV: num("mat-upper-v", 4.10),
-    ehullSlope: Math.max(1, num("mat-ehull-slope", 20))
+    ehullSlope: Math.max(1, num("mat-ehull-slope", 20)),
+    chargePenalty: Math.max(0, num("mat-charge-penalty", 0.10)),
+    defectPenalty: Math.max(0, num("mat-defect-penalty", 0.06))
   };
 }
 function materialDopants(comp) {
@@ -2113,6 +2338,43 @@ function normalizeMaterialComposition(comp) {
     al: !!(comp.al || comp.al_doped),
     ti: !!(comp.ti || comp.ti_doped)
   };
+}
+
+function materialSelectionFromControls(normalized) {
+  var raw = {
+    Na: parseFloat(document.getElementById("na-slider").value),
+    Mn: parseFloat(document.getElementById("mn-slider").value),
+    Fe: parseFloat(document.getElementById("fe-slider").value),
+    al: document.getElementById("sw-al").checked,
+    ti: document.getElementById("sw-ti").checked
+  };
+  if (!normalized) return raw;
+  var norm = normalizeMaterialComposition(raw);
+  return {
+    Na: raw.Na,
+    Mn: norm.Mn,
+    Fe: norm.Fe,
+    al: raw.al,
+    ti: raw.ti,
+    rawMn: raw.Mn,
+    rawFe: raw.Fe,
+    normalized: norm
+  };
+}
+
+function updateMaterialSiteNote(raw) {
+  var note = document.getElementById("mat-site-note");
+  if (!note) return;
+  raw = raw || materialSelectionFromControls(false);
+  var norm = normalizeMaterialComposition(raw);
+  var dopText = Object.keys(norm.dopants || {}).map(function (k) {
+    return k + "=" + (norm.dopants[k] * 100).toFixed(1) + "%";
+  }).join(", ") || "no dopant";
+  var rawSum = Number(norm.tmTotalRaw || 0);
+  var warn = Math.abs(rawSum - 1) > 0.02;
+  note.innerHTML = (warn ? '<span class="tag warn">normalized</span> ' : '<span class="tag ok">site balanced</span> ')
+    + "TM site raw sum " + rawSum.toFixed(3) + "; scoring uses Mn=" + norm.Mn.toFixed(3)
+    + ", Fe=" + norm.Fe.toFixed(3) + ", " + dopText + ".";
 }
 function dopantStrength(norm, key) {
   return clamp(Object.keys(norm.dopants).reduce(function (sum, el) {
@@ -2182,7 +2444,8 @@ function scoreComposition(comp, T, cfg) {
   var avgVoltage = ((mnE * (3.50 + 0.24 * (1 - mn3) + 0.05 * (cfg.upperV - 4.0))) + (feE * (3.18 + 0.08 * feGate)) + oxygenE * 4.15) / denom + 0.06 * (0.85 - na);
   avgVoltage = clamp(avgVoltage, 2.60, Math.min(cfg.upperV, 4.35));
   var p2Crit = 4.04 + 0.12 * fe + 0.18 * phaseStabilization - 0.13 * mn3 - 0.08 * Math.max(0, 0.78 - na);
-  var p2Risk = clamp(sigmoid((cfg.upperV - p2Crit) / 0.075) * (0.35 + 0.65 * sigmoid((0.86 - na) / 0.12)) * (1 - 0.52 * p2Suppression), 0, 1);
+  var naP2Weight = 0.35 + (1 - 0.35) * sigmoid((0.86 - na) / 0.12);
+  var p2Risk = clamp(sigmoid((cfg.upperV - p2Crit) / 0.075) * naP2Weight * (1 - 0.52 * p2Suppression), 0, 1);
   var jtRisk = clamp(mn * mn3 * (1 - 0.55 * jtSuppression) * (1 + 0.18 * sigmoid((cfg.upperV - 4.05) / 0.10)), 0, 1);
   var oxygenRisk = clamp(0.12 + 0.54 * p2Risk + 0.34 * clamp(cfg.upperV - 4.10, 0, 0.35) / 0.35 + 0.30 * Math.max(0, 0.76 - na) + 0.18 * mn * (1 - mn3) - 0.20 * phaseStabilization, 0, 1);
   var mixingRisk = clamp(0.10 + 0.28 * Math.abs(mn - fe) + 0.34 * norm.siteErrorAbs + 0.16 * Math.max(0, 0.72 - na) - 0.10 * phaseStabilization, 0, 1);
@@ -2212,7 +2475,7 @@ function scoreComposition(comp, T, cfg) {
   var stability = clamp(0.24 * (1 - fade500) + 0.22 * phaseStab + 0.18 * defectScore + 0.14 * thermalAbuse + 0.12 * rateCap + 0.10 * (1 - chargeRisk), 0, 1);
   var evidence = nearestMaterialEvidence(norm);
   var confidence = clamp(0.84 - 0.22 * Math.min(evidence.distance, 1.5) - 0.28 * chargeRisk - 0.22 * norm.siteErrorAbs - 0.12 * oxygenRisk + 0.05, 0.18, 0.92);
-  var score = cfg.wCap * clamp(q0 / 180, 0, 1.25) + cfg.wStab * stability + cfg.wFade * (1 - fade500) + cfg.wCost * clamp(1 - costKwh / 220, 0, 1) - 0.10 * chargeRisk - 0.06 * norm.siteErrorAbs;
+  var score = cfg.wCap * clamp(q0 / 180, 0, 1.25) + cfg.wStab * stability + cfg.wFade * (1 - fade500) + cfg.wCost * clamp(1 - costKwh / 220, 0, 1) - cfg.chargePenalty * chargeRisk - cfg.defectPenalty * (1 - defectScore);
   var phaseState = p2Risk > 0.62 ? "P2->O2 transition risk" : chargeRisk > 0.45 ? "charge-compensated defect phase" : phaseStab < 0.38 ? "mixed/impurity phase risk" : jtRisk > 0.38 ? "JT-distorted layered phase" : "P2 layered phase";
   var curve = simulateMaterialRetention(fadeTerms, Math.max(1000, Math.min(2200, cycleLife * 1.25)));
   return {
@@ -2656,28 +2919,17 @@ function drawCycleLifeCurve(props) {
 }
 
 function updateMat() {
-  var selected = {
-    Na: parseFloat(document.getElementById("na-slider").value),
-    Mn: parseFloat(document.getElementById("mn-slider").value),
-    Fe: parseFloat(document.getElementById("fe-slider").value),
-    al: document.getElementById("sw-al").checked,
-    ti: document.getElementById("sw-ti").checked
-  };
+  var selected = materialSelectionFromControls(false);
   document.getElementById("na-val").textContent = selected.Na.toFixed(2);
   document.getElementById("mn-val").textContent = selected.Mn.toFixed(2);
   document.getElementById("fe-val").textContent = selected.Fe.toFixed(2);
+  updateMaterialSiteNote(selected);
   drawLatticeSimulation(selected);
 }
 
 async function runScreening() {
   var cfg = materialKnobs();
-  var selected = {
-    Na: parseFloat(document.getElementById("na-slider").value),
-    Mn: parseFloat(document.getElementById("mn-slider").value),
-    Fe: parseFloat(document.getElementById("fe-slider").value),
-    al: document.getElementById("sw-al").checked,
-    ti: document.getElementById("sw-ti").checked
-  };
+  var selected = materialSelectionFromControls(true);
   setHtml("mat-decision", "<strong>Screening:</strong> computing charge balance, phase stability, fade mechanisms, and local evidence distance...");
   var selectedProp = null;
   var items = null;
@@ -2698,7 +2950,9 @@ async function runScreening() {
         w_capacity: cfg.wCap,
         w_stability: cfg.wStab,
         w_fade: cfg.wFade,
-        w_cost: cfg.wCost
+        w_cost: cfg.wCost,
+        charge_penalty: cfg.chargePenalty,
+        defect_penalty: cfg.defectPenalty
       })
     });
     if (!res.ok) throw new Error("screen endpoint returned " + res.status);
@@ -2724,6 +2978,7 @@ async function runScreening() {
   document.getElementById("mat-stab").textContent = selectedProp.stability.toFixed(2);
   document.getElementById("mat-jt").textContent = selectedProp.jtIndex.toFixed(2);
   selectedProp.comp = selected;
+  selectedProp.rawComp = { Mn: selected.rawMn, Fe: selected.rawFe };
   selectedProp.candidates = items.slice(0, 48).map(function (it) {
     return { composition: it.comp, score: it.prop.score, capacity: it.prop.Q0, stability: it.prop.stability, fade500: it.prop.fade500 };
   });
@@ -2743,14 +2998,19 @@ async function runScreening() {
   anim();
   drawCompositionLandscape(makeCanvas("mat-landscape-chart"), items, selected);
   var synth = selectedProp.stability > 0.72 && selectedProp.fade500 < 0.16 && selectedProp.chargeRisk < 0.28 && selectedProp.oxygenRisk < 0.46 && Math.abs(selectedProp.siteError || 0) < 0.12;
+  var normalizedNote = selected.normalized && Math.abs(selected.normalized.siteError || 0) > 0.02
+    ? " Raw TM sliders were normalized before scoring."
+    : "";
   var advice = synth
     ? "Good candidate for a small coin-cell synthesis queue, with XRD phase check before cycling."
     : "Keep in simulation queue; correct site balance, charge state, or phase risk before spending lab synthesis effort.";
   var evidenceText = selectedProp.evidence && selectedProp.evidence.nearest_formula ? ", nearest evidence " + escapeHtml(selectedProp.evidence.nearest_formula) : "";
-  setHtml("mat-decision", "<strong>Screening output:</strong> score " + selectedProp.score.toFixed(3) + ", phase " + escapeHtml(selectedProp.phaseState || "screened") + ", fade500 " + (100 * selectedProp.fade500).toFixed(1) + "%, confidence " + fmt(selectedProp.confidence, 2) + evidenceText + ". <strong>Decision:</strong> " + advice + ' <button class="btn btn-ghost" style="margin-left:0.75rem" onclick="testMaterialInDiagnostics()">Test in Diagnostics &rarr;</button>');
+  setHtml("mat-decision", "<strong>Screening output:</strong> score " + selectedProp.score.toFixed(3) + ", phase " + escapeHtml(selectedProp.phaseState || "screened") + ", fade500 " + (100 * selectedProp.fade500).toFixed(1) + "%, confidence " + fmt(selectedProp.confidence, 2) + evidenceText + "." + normalizedNote + " <strong>Decision:</strong> " + advice + ' <button class="btn btn-ghost" style="margin-left:0.75rem" onclick="testMaterialInDiagnostics()">Test in Diagnostics &rarr;</button>');
   setReadouts("mat-risk-readout", [
     { k: "Objective", v: selectedProp.score.toFixed(3) },
     { k: "Phase risk", v: fmt(selectedProp.p2Risk, 2) },
+    { k: "Charge risk", v: fmt(selectedProp.chargeRisk, 2) },
+    { k: "Defect score", v: fmt(selectedProp.defectScore, 2) },
     { k: "Site error", v: fmt((selectedProp.siteError || 0) * 100, 1) + "%" },
     { k: "Cost proxy", v: "$" + selectedProp.costKwh.toFixed(0) + "/kWh" }
   ]);
@@ -2810,12 +3070,26 @@ function shrinkingCoreConversion(k, tMin) {
   if (kt >= 1.0) return 0.995;
   return clamp(1 - Math.pow(Math.max(1 - kt, 0), 3), 0, 0.995);
 }
+function diffusionCoreConversion(k, tMin) {
+  // Product-layer diffusion control: 1 - 2X/3 - (1-X)^(2/3) = kt.
+  var target = Math.max(0, k * tMin);
+  var lo = 0, hi = 0.995;
+  for (var i = 0; i < 36; i++) {
+    var mid = (lo + hi) / 2;
+    var lhs = 1 - 2 * mid / 3 - Math.pow(Math.max(1 - mid, 0), 2 / 3);
+    if (lhs < target) lo = mid; else hi = mid;
+  }
+  return clamp((lo + hi) / 2, 0, 0.995);
+}
 function recoveryForElement(el, acid, tempC, tMin, bayes) {
   var R = 8.314;
   var T = tempC + 273.15;
   var tempFactor = Math.exp(-el.Ea / R * (1 / T - 1 / 353.15));
   var k = el.k0 * Math.pow(acid, el.order) * tempFactor * Math.pow(50 / el.particle, 0.35);
-  var x = shrinkingCoreConversion(k, tMin);
+  var surfaceX = shrinkingCoreConversion(k, tMin);
+  var diffusionX = diffusionCoreConversion(k * 0.62, tMin);
+  var diffusionWeight = clamp((25 - el.particle) / 18, 0, 0.75);
+  var x = surfaceX * (1 - diffusionWeight) + diffusionX * diffusionWeight;
   if (!bayes || !el.prior) return x;
   return clamp(0.75 * x + 0.25 * betaMean(el.prior[0], el.prior[1]), 0, 0.995);
 }
@@ -2831,7 +3105,11 @@ function recyclingKnobs() {
     time: Math.max(5, num("rec-time", 120)),
     particle: Math.max(2, num("rec-particle", 50)),
     acidOrder: Math.max(0.05, num("rec-acid-order", 0.95)),
-    eaMn: Math.max(5000, num("rec-ea-mn", 27000))
+    eaMn: Math.max(5000, num("rec-ea-mn", 27000)),
+    acidCost: Math.max(0, num("rec-acid-cost", 8.5)),
+    energyCost: Math.max(0, num("rec-energy-cost", 8.0)),
+    processingCost: Math.max(0, num("rec-processing-cost", 150)),
+    metalPrice: Math.max(1, num("rec-metal-price", 620))
   };
 }
 
@@ -2900,7 +3178,10 @@ function runRecycling() {
       elements.forEach(function (el, i) {
         var feedNoise = clamp(1 + seededGaussian(rng) * 0.08, 0.75, 1.25);
         var assayNoise = clamp(1 + seededGaussian(rng) * 0.025, 0.92, 1.08);
-        tot += mass * el.wt * feedNoise * targets[i] * assayNoise;
+        var particleNoise = clamp(1 + seededGaussian(rng) * 0.18, 0.55, 1.65);
+        var elSample = Object.assign({}, el, { particle: Math.max(2, el.particle * particleNoise) });
+        var sampleRecovery = recoveryForElement(elSample, acid, temp, tFinal, bay);
+        tot += mass * el.wt * feedNoise * sampleRecovery * assayNoise;
       });
       mcTotals.push(tot);
     }
@@ -2910,27 +3191,30 @@ function runRecycling() {
   var hi = mc ? mcTotals[Math.floor(mcTotals.length * 0.95)] : totalRecovered;
   var acidKg = acid * 0.098 * mass;
   var heatKwh = Math.max(0, temp - 25) * mass * 0.00116;
-  var cost = acidKg * 8.5 + heatKwh * 8.0 + mass * 150;
+  var cost = acidKg * cfg.acidCost + heatKwh * cfg.energyCost + mass * cfg.processingCost;
   var impurityPenalty = clamp(targets[3] * 0.28 + targets[4] * 0.36, 0, 0.8);
   var productPurity = clamp(0.94 - impurityPenalty * 0.18 + (targets[0] + targets[1] + targets[2]) * 0.012, 0.70, 0.98);
   var log = document.getElementById("recycle-log");
   log.innerHTML = '<div class="cmd">$ recycling --shrinking-core --mass=' + mass + "kg --acid=" + acid + "M --temp=" + temp + 'C</div>';
   log.innerHTML += '<div class="info">ODE: 1 - (1-X)^(1/3) = k(C_acid,T,Rp)t, with Arrhenius temperature scaling.</div>';
-  if (mc) log.innerHTML += '<div class="info">Monte Carlo: ' + RECYCLING_MC_SAMPLES + ' feedstock and assay samples with deterministic scenario seed. Recovery physics unchanged per sample.</div>';
+  if (mc) log.innerHTML += '<div class="info">Monte Carlo: ' + RECYCLING_MC_SAMPLES + ' feedstock, assay, and particle-size samples with deterministic scenario seed.</div>';
+  if (cfg.particle < 25) log.innerHTML += '<div class="warn">Fine particles detected: mixed product-layer diffusion correction applied below 25 um.</div>';
   if (bay) log.innerHTML += '<div class="info">Bayesian priors: Mn Beta(8.8,1.2), Fe Beta(7.2,2.8), Na Beta(6.5,3.5).</div>';
   log.innerHTML += '<div class="ok">Recovered metals: ' + totalRecovered.toFixed(1) + "kg, 90% interval " + lo.toFixed(1) + "-" + hi.toFixed(1) + "kg</div>";
   log.innerHTML += '<div class="info">Process cost estimate: INR ' + cost.toFixed(0) + " per batch; product purity proxy " + (productPurity * 100).toFixed(1) + "%</div>";
-  var marginProxy = totalRecovered * 620 * productPurity - cost;
+  var marginProxy = totalRecovered * cfg.metalPrice * productPurity - cost;
   var decision = marginProxy > 0 && targets[0] > 0.82 && productPurity > 0.86
     ? "Run this recipe as a pilot batch; Mn recovery and economics are inside the current gate."
     : "Do not run as-is; adjust acid/time/particle size or improve impurity control before pilot scale.";
-  window.__kfRecycling = { totalRecovered: totalRecovered, lo: lo, hi: hi, purity: productPurity, cost: cost, marginProxy: marginProxy, elements: elements, targets: targets, mass: mass };
+  window.__kfRecycling = { totalRecovered: totalRecovered, lo: lo, hi: hi, purity: productPurity, cost: cost, marginProxy: marginProxy, elements: elements, targets: targets, mass: mass, acid: acid, tempC: temp, leachMin: cfg.time, particleUm: cfg.particle, economics: { acidCost: cfg.acidCost, energyCost: cfg.energyCost, processingCost: cfg.processingCost, metalPrice: cfg.metalPrice } };
   setHtml("recycle-decision", "<strong>Recipe output:</strong> recovered " + totalRecovered.toFixed(1) + " kg, Mn " + (targets[0] * 100).toFixed(1) + "%, purity proxy " + (productPurity * 100).toFixed(1) + "%, cost INR " + cost.toFixed(0) + ". <strong>Decision:</strong> " + decision);
   setReadouts("recycle-readout", [
     { k: "Recovered", v: totalRecovered.toFixed(1) + " kg" },
     { k: "90% interval", v: lo.toFixed(1) + "-" + hi.toFixed(1) + " kg" },
     { k: "Purity proxy", v: (productPurity * 100).toFixed(1) + "%" },
-    { k: "Margin proxy", v: "INR " + marginProxy.toFixed(0) }
+    { k: "Margin proxy", v: "INR " + marginProxy.toFixed(0) },
+    { k: "Particle regime", v: cfg.particle < 25 ? "mixed diffusion" : "surface control" },
+    { k: "Metal price", v: "INR " + cfg.metalPrice.toFixed(0) + "/kg" }
   ]);
   var recConf = computeRecyclingConfidence(window.__kfRecycling);
   renderConfidence("recycle-confidence", recConf.confidence, recConf.detail);
@@ -3064,6 +3348,8 @@ function collectAssistantState() {
       na: num("diag-na", 1.02),
       mn: num("diag-mn", 0.52),
       fe: num("diag-fe", 0.43),
+      dopant_frac: num("diag-dop", 0.05),
+      dopant_type: (document.getElementById("diag-dopant-type") || {}).value || "Al",
       eol_capacity: textOf("diag-eol"),
       fade: textOf("diag-fade"),
       voltage_end: diag.voltage ? diag.voltage[diag.voltage.length - 1] : null,
@@ -3084,6 +3370,8 @@ function collectAssistantState() {
       inject_fault: document.getElementById("sw-fault").checked,
       max_risk: risks.length ? Math.max.apply(null, risks) : null,
       threshold: Number.isFinite(bmsMeta.threshold) ? bmsMeta.threshold : num("bms-risk-thresh", 0.42),
+      topology: bmsMeta.topology || bmsTopologyInfo(parseInt(document.getElementById("pack-slider").value, 10) || 8),
+      loss_ratio: bmsMeta.lossRatio || num("bms-loss-ratio", 6.0),
       fault_cell: Number.isFinite(bmsMeta.faultCell) && bmsMeta.faultCell >= 0 ? "C" + bmsMeta.faultCell : "none",
       cell_details: cellDetails,
       decision: textOf("bms-decision")
@@ -3126,6 +3414,7 @@ function collectAssistantState() {
       model_outputs: {
         M1_CathodeUDE: byodModels.M1_CathodeUDE || null,
         M11_ElectrolyteHealth: byodModels.M11_ElectrolyteHealth || null,
+        M12_Replenishability: byodModels.M12_Replenishability || null,
         M13_ChemIdentifier: byodModels.M13_ChemIdentifier || null,
         M14_FormationProtocol: byodModels.M14_FormationProtocol || null
       },
@@ -3233,7 +3522,7 @@ function initArchitecture() {
   var cards = [
     { t: "Universal Differential Equations", d: "Physics ODE terms for SEI, P2-O2, Jahn-Teller coupling, Na desolvation, and rate stress are explicit; residuals are bounded correction terms." },
     { t: "Pack Thermal Graph", d: "Pack monitoring uses topology-aware thermal coupling, EIS drift, and multi-scale lookback windows." },
-    { t: "qNEHVI Bayesian Screening", d: "Composition candidates are scored on capacity, fade, life, and cost, then filtered by noisy hypervolume-style Pareto improvement." },
+    { t: "qNEHVI-style Bayesian Screening", d: "Composition candidates are scored on capacity, fade, life, and cost, then filtered by a noisy hypervolume-improvement proxy; full BoTorch qNEHVI is reserved for the GPU training path." },
     { t: "Bayesian Recycling Loop", d: "Recovery priors are beta distributions and process conversion follows shrinking-core leaching kinetics." },
     { t: "Uncertainty Propagation", d: "Composition, cell, pack, and recycling predictions carry uncertainty bounds instead of single unqualified numbers." },
     { t: "Evidence Registry", d: "Prediction claims are tied to local datasets, validation gates, and model provenance." },
@@ -3345,7 +3634,6 @@ function fetchModelRegistry() {
       renderCheckpointProvenance(data);
     })
     .catch(function (err) {
-      renderCheckpointProvenance(null);
       console.warn("Model registry fetch failed", err);
     });
 }
@@ -3387,8 +3675,8 @@ function initAPIEndpoints() {
 function showAPI(ep) {
   var examples = {
     "/api/predict/degradation": '{\n  "result": {\n    "capacity_end": 0.912,\n    "fade_pct": 0.088,\n    "mechanisms": {"p2o2": 0.041, "jt": 0.008, "sei_desolv": 0.024}\n  },\n  "provenance": {"model": "Na-ion UDE physics mirror"}\n}',
-    "/api/simulate/bms": '{\n  "cells": 8,\n  "thermal_equation": "Cth dT/dt = q + sum(kij(Tj-Ti)) - h(T-Ta)",\n  "max_risk": 0.64,\n  "alerts": [{"t": 74, "cell": 3, "risk": 0.51}]\n}',
-    "/api/optimize/recycling": '{\n  "recoveries": {"Mn": {"recovery_rate": 0.91}, "Fe": {"recovery_rate": 0.78}, "Na": {"recovery_rate": 0.82}},\n  "kinetics": "shrinking-core leaching",\n  "uncertainty": {"basis": "Monte Carlo feedstock assay"}\n}',
+    "/api/simulate/bms": '{\n  "cells": 8,\n  "topology": {"label": "4S2P current-sharing module"},\n  "loss_ratio": 6.0,\n  "thermal_equation": "Cth dT/dt = q + sum(kij(Tj-Ti)) - h(T-Ta)",\n  "max_risk": 0.64,\n  "alerts": [{"t": 74, "cell": 3, "risk": 0.51}]\n}',
+    "/api/optimize/recycling": '{\n  "recoveries": {"Mn": {"recovery_rate": 0.91}, "Fe": {"recovery_rate": 0.78}, "Na": {"recovery_rate": 0.82}},\n  "kinetics": "shrinking-core leaching with mixed diffusion correction below 25 um",\n  "economics": {"metal_price_inr_kg": 620},\n  "uncertainty": {"basis": "Monte Carlo feedstock, assay, and particle size"}\n}',
     "/api/byod/analyze": '{\n  "session_id": "uuid",\n  "schema": {"format": "neware", "score": 0.82},\n  "features": {"early_coulombic_efficiency": 0.992},\n  "feature_mask": [1,1,1],\n  "predictions": {"soh": 0.94, "confidence": 0.71, "inference_mode": "checkpoint_plus_rules"}\n}',
     "/api/byod/analyze-full": '{\n  "session_id": "uuid",\n  "checkpoint_inference": {"status": "ok"},\n  "predictions": {"inference_mode": "checkpoint_plus_rules"}\n}',
     "/api/byod/compare": '{\n  "comparison": {"delta": {"soh": 0.012}, "decision": "file_b looks healthier on SOH"},\n  "file_a_session_id": "uuid",\n  "file_b_session_id": "uuid"\n}',
@@ -3651,13 +3939,7 @@ function computeUploadConfidence(byod) {
 
 // ── Ragone Plot (Energy vs Power density) ──────────────────────────────
 function currentMaterialForAnalytics() {
-  var selected = {
-    Na: num("na-slider", 1.0),
-    Mn: num("mn-slider", 0.5),
-    Fe: num("fe-slider", 0.5),
-    al: !!(document.getElementById("sw-al") && document.getElementById("sw-al").checked),
-    ti: !!(document.getElementById("sw-ti") && document.getElementById("sw-ti").checked)
-  };
+  var selected = materialSelectionFromControls(true);
   var mat = window.__kfMaterials;
   if (mat && mat.comp && Math.abs(Number(mat.comp.Na) - selected.Na) < 1e-6 && Math.abs(Number(mat.comp.Mn) - selected.Mn) < 1e-6 && Math.abs(Number(mat.comp.Fe) - selected.Fe) < 1e-6 && !!mat.comp.al === selected.al && !!mat.comp.ti === selected.ti) {
     return mat;
@@ -3912,11 +4194,14 @@ function runClimateStress() {
   var minT = Math.min.apply(null, profile.temps);
   var hsHours = profile.heatStress.filter(function (v) { return v > 0.1; }).length;
   var cpHours = profile.coldPlating.filter(function (v) { return v > 0.1; }).length;
+  var humidHours = profile.rhs.filter(function (v) { return v > 75; }).length;
   setReadouts("climate-readout", [
     { k: "Mean T", v: meanT.toFixed(1) + " °C" },
     { k: "Max T", v: maxT.toFixed(1) + " °C" },
     { k: "Heat Stress hrs", v: String(hsHours) },
-    { k: "Cold Plating hrs", v: String(cpHours) }
+    { k: "Cold Plating hrs", v: String(cpHours) },
+    { k: "Mean RH", v: mean(profile.rhs).toFixed(0) + "%" },
+    { k: "Humidity hrs", v: String(humidHours) }
   ]);
   showToast(profile.name + ": mean " + meanT.toFixed(1) + "°C, " + hsHours + " heat-stress hours.", "ok");
 }
@@ -3930,9 +4215,14 @@ function runClimateCompare() {
       name: CLIMATE_SEEDS[key].name,
       meanT: mean(p.temps),
       maxT: Math.max.apply(null, p.temps),
+      meanRH: mean(p.rhs),
       hsHours: p.heatStress.filter(function (v) { return v > 0.1; }).length,
-      cpHours: p.coldPlating.filter(function (v) { return v > 0.1; }).length
+      cpHours: p.coldPlating.filter(function (v) { return v > 0.1; }).length,
+      humidHours: p.rhs.filter(function (v) { return v > 75; }).length
     };
+  });
+  barData.sort(function (a, b) {
+    return (b.hsHours + b.humidHours * 0.45 + b.cpHours * 0.55) - (a.hsHours + a.humidHours * 0.45 + a.cpHours * 0.55);
   });
   var cv = makeCanvas("climate-compare-chart");
   if (!cv) return;
@@ -3969,6 +4259,14 @@ function runClimateCompare() {
   ctx.fillStyle = "#777";
   ctx.font = "10px JetBrains Mono, monospace";
   ctx.fillText("Heat stress hours (red) + cold plating (blue) across India regions", pad.l, 14);
+  var byHumidity = barData.slice().sort(function (a, b) { return b.humidHours - a.humidHours; })[0];
+  var byCold = barData.slice().sort(function (a, b) { return b.cpHours - a.cpHours; })[0];
+  setReadouts("climate-readout", [
+    { k: "Worst heat", v: barData[0].name + " (" + barData[0].hsHours + "h)" },
+    { k: "Worst humidity", v: byHumidity.name + " (" + byHumidity.humidHours + "h)" },
+    { k: "Worst cold", v: byCold.name + " (" + byCold.cpHours + "h)" },
+    { k: "Method", v: "T + RH + charge stress" }
+  ]);
 }
 
 window.addEventListener("DOMContentLoaded", function () {
@@ -3982,6 +4280,8 @@ window.addEventListener("DOMContentLoaded", function () {
   fetchModelRegistry();
   initAPIEndpoints();
   initAssistant();
+  updateNavHealth();
+  setInterval(updateNavHealth, 60000);
   updateDiag();
   updateBMS();
   updateMat();

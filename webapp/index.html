@@ -28,9 +28,9 @@
     <a href="#" onclick="navigate('platform')" id="nav-platform">Status</a>
     <a href="#" onclick="navigate('api')" id="nav-api">API</a>
   </div>
-  <div class="nav-status">
+  <div class="nav-status" id="nav-status" title="Live backend health check">
     <span class="dot"></span>
-    <span>OPERATIONAL</span>
+    <span id="nav-status-text">CHECKING</span>
   </div>
 </nav>
 
@@ -112,7 +112,7 @@
           <span class="name">Cycles</span>
           <span class="val" id="cycles-val">500</span>
         </div>
-        <div class="range-desc">Total charge-discharge cycles to simulate. The UDE integrates the degradation ODE forward using an Euler solver with adaptive clipping to maintain physical bounds.</div>
+        <div class="range-desc">Total charge-discharge cycles to simulate. The browser mirror advances explicit cycle increments with parabolic SEI growth, Butler-Volmer overpotential, and a bounded residual term.</div>
         <input type="range" id="cycles-slider" min="100" max="2000" value="500" step="50" oninput="updateDiag()">
       </div>
 
@@ -123,7 +123,8 @@
           <label title="Na > 1.0 = superstoichiometric. Compensates grain-boundary Na loss during high-temperature calcination (standard synthesis practice for P2-type layered oxides).">Na <span id="diag-na-val">1.02</span><input class="mini-input" id="diag-na" type="number" value="1.02" min="0.60" max="1.20" step="0.02" oninput="updateDiag()"></label>
           <label>Mn <span id="diag-mn-val">0.52</span><input class="mini-input" id="diag-mn" type="number" value="0.52" min="0.05" max="0.95" step="0.02" oninput="updateDiag()"></label>
           <label>Fe <span id="diag-fe-val">0.43</span><input class="mini-input" id="diag-fe" type="number" value="0.43" min="0.05" max="0.95" step="0.02" oninput="updateDiag()"></label>
-          <label>dopant <span id="diag-dop-val">0.050</span><input class="mini-input" id="diag-dop" type="number" value="0.05" min="0" max="0.25" step="0.01" oninput="updateDiag()"></label>
+          <label>dopant species<select class="mini-input" id="diag-dopant-type" onchange="updateDiag()"><option value="Al" selected>Al3+ structural</option><option value="Ti">Ti4+ JT/rate</option><option value="generic">generic fitted</option></select></label>
+          <label>dopant frac <span id="diag-dop-val">0.050</span><input class="mini-input" id="diag-dop" type="number" value="0.05" min="0" max="0.25" step="0.01" oninput="updateDiag()"></label>
         </div>
       </div>
 
@@ -164,11 +165,11 @@
       <div class="formula-box">
         <div class="formula-title">Parameterizable Degradation ODE</div>
         <code>dQ/dN = -Q[ kSEI·d(√N)/dN + kP2·g(SOC,T,JT) + kJT·JT(SOC) + kdes·ln(1+DNa) + kBV·η² + r ]</code>
-        <div class="formula-note" style="font-size:0.62rem;color:#666;margin-top:0.35rem">SEI uses parabolic kinetics d(√N)/dN = 1/(2√N) (Ploehn-Ramadass diffusion-limited model). P2-O2 branching ratio is absorbed into kP2. JT evolves with SOC: Mn³⁺ fraction peaks at low SOC. η is Butler-Volmer overpotential. r is a bounded residual (|r| ≤ 0.15·total_loss). All coefficients are tunable below.</div>
+        <div class="formula-note" style="font-size:0.62rem;color:#666;margin-top:0.35rem">SEI uses parabolic kinetics d(sqrt(N))/dN = 1/(2sqrt(N)). g(SOC,T,JT) = sigmoid((SOC-SOC*)/0.045) * exp(T stress) * (1+0.35*JT) * dopant suppression; Al mainly suppresses P2-O2, Ti mainly suppresses JT/rate stress. eta = asinh(C-rate/(2*i0_proxy)), where i0_proxy depends on Fe fraction, desolvation barrier, and charge-transfer beta. r is bounded (|r| &lt;= 0.15*total_loss).</div>
         <div class="knob-grid">
           <label>SEI scale<input class="mini-input" id="diag-k-sei" type="number" value="1.00" step="0.05"></label>
           <label>SEI Ea eV<input class="mini-input" id="diag-ea-sei" type="number" value="0.56" step="0.02"></label>
-          <label title="P2-O2 branching ratio (0.65, Lu et al. 2023) is absorbed into this value">P2 rate<input class="mini-input" id="diag-p2-k" type="number" value="0.00182" step="0.0001"></label>
+          <label title="Legacy P2-O2 branch weighting is absorbed into this user-settable rate. There is no hidden multiplier.">P2 rate<input class="mini-input" id="diag-p2-k" type="number" value="0.00182" step="0.0001"></label>
           <label>P2 SOC*<input class="mini-input" id="diag-p2-soc" type="number" value="0.78" step="0.01"></label>
           <label>JT scale<input class="mini-input" id="diag-jt-scale" type="number" value="1.00" step="0.05"></label>
           <label>BV scale<input class="mini-input" id="diag-bv-scale" type="number" value="1.00" step="0.05"></label>
@@ -275,7 +276,7 @@
           <button class="btn btn-ghost" onclick="exportBYODCSV()" type="button">Export CSV</button>
           <button class="btn btn-ghost" onclick="exportBYODJSON()" type="button">Export JSON</button>
         </div>
-        <div class="plot-note" id="byod-status">Awaiting a cycler export. Best inputs include cycle, current, voltage, capacity, and temperature columns.</div>
+        <div class="plot-note" id="byod-status">Awaiting a cycler export. Best inputs include cycle, current, voltage, capacity, and temperature columns. dQ/dV needs per-step voltage-capacity traces, not only cycle summaries.</div>
       </div>
 
       <div class="panel" style="margin-bottom:1rem">
@@ -349,6 +350,9 @@
         <button class="btn btn-ghost" onclick="exportExperimentTicketsCSV()" type="button">Export Tickets</button>
         <button class="btn btn-ghost" onclick="exportDecisionMemoMarkdown()" type="button">Memo MD</button>
         <button class="btn btn-ghost" onclick="exportDecisionMemoJSON()" type="button">Memo JSON</button>
+        <button class="btn btn-ghost" onclick="saveSessionJSON()" type="button">Save Session</button>
+        <button class="btn btn-ghost" onclick="document.getElementById('session-file').click()" type="button">Load Session</button>
+        <input id="session-file" type="file" accept="application/json,.json" style="display:none" onchange="loadSessionJSONFile(event)">
       </div>
     </div>
     <table class="tbl decision-table">
@@ -398,6 +402,28 @@
         <input type="range" id="pack-slider" min="4" max="32" value="8" step="2" oninput="updateBMS()">
       </div>
 
+      <div class="formula-box">
+        <div class="formula-title">Pack Layout Assumptions</div>
+        <div class="knob-grid">
+          <label>Topology
+            <select class="mini-input" id="bms-topology" onchange="updateBMS()">
+              <option value="series">Series string</option>
+              <option value="4s2p" selected>4S2P module</option>
+              <option value="2s4p">2S4P module</option>
+              <option value="grid">Thermal grid only</option>
+            </select>
+          </label>
+          <label>Cell format
+            <select class="mini-input" id="bms-format" onchange="applyBmsFormatDefaults()">
+              <option value="18650">18650 cylindrical</option>
+              <option value="pouch" selected>Pouch cell</option>
+              <option value="prismatic">Prismatic cell</option>
+            </select>
+          </label>
+        </div>
+        <div class="formula-note" id="bms-topology-note" style="font-size:0.62rem;color:#666;margin-top:0.35rem">4S2P shares current inside each parallel group; series string uses uniform current. Thermal edges follow the drawn module layout.</div>
+      </div>
+
       <div class="range-row">
         <div class="range-header">
           <span class="name">Simulation Duration</span>
@@ -437,14 +463,14 @@
       <div class="switch-row">
         <div class="switch-label">
           <span class="name">Asymmetric Alert Loss</span>
-          <span class="desc">Uses a lower action threshold when late detection is more costly than a false alarm.</span>
+          <span class="desc">Uses the false-negative / false-positive cost ratio below to lower the action threshold when late detection is more costly than a false alarm.</span>
         </div>
         <label class="switch"><input type="checkbox" id="sw-asym" checked onchange="updateBMS()"><span class="slider"></span></label>
       </div>
 
       <div class="formula-box">
         <div class="formula-title">Parameterizable Pack Thermal/Risk Equation</div>
-        <code>Cth dTi/dt = I²Ri + Σ kij(Tj-Ti) - h(Ti-Ta); risk = f(T, dT/dt, Rct, RSEI, neighbor risk)</code>
+        <code>Cth dTi/dt = I²Ri + Σ kij(Tj-Ti) - h(Ti-Ta); risk_i(t) = f(T, dT/dt, Rct, RSEI, neighbor risk_i(t-dt))</code>
         <div class="knob-grid">
           <label>Cth J/K<input class="mini-input" id="bms-cth" type="number" value="95" step="5"></label>
           <label>edge k<input class="mini-input" id="bms-kedge" type="number" value="0.18" step="0.01"></label>
@@ -452,6 +478,7 @@
           <label>load scale<input class="mini-input" id="bms-load" type="number" value="1.00" step="0.05"></label>
           <label>Rct gate<input class="mini-input" id="bms-rct-gate" type="number" value="0.043" step="0.001"></label>
           <label>alert risk<input class="mini-input" id="bms-risk-thresh" type="number" value="0.42" step="0.01"></label>
+          <label>FN/FP cost<input class="mini-input" id="bms-loss-ratio" type="number" value="6.0" min="1" max="50" step="0.5"></label>
           <label>seed<input class="mini-input" id="bms-seed" type="number" value="42" step="1"></label>
         </div>
         <div style="margin-top:0.5rem;display:flex;gap:0.5rem;align-items:center">
@@ -533,6 +560,7 @@
         <div class="range-desc">Iron fraction for the Fe3+/Fe4+ redox contribution. Fe raises voltage but shifts charge balance and migration penalties.</div>
         <input type="range" id="fe-slider" min="0.1" max="0.9" value="0.5" step="0.05" oninput="updateMat()">
       </div>
+      <div class="plot-note" id="mat-site-note">Transition-metal site sum is normalized before scoring.</div>
 
       <div class="divider"></div>
 
@@ -562,11 +590,14 @@
           <label>w cost<input class="mini-input" id="mat-w-cost" type="number" value="0.14" step="0.02"></label>
           <label>upper V<input class="mini-input" id="mat-upper-v" type="number" value="4.10" step="0.05"></label>
           <label>ehull slope<input class="mini-input" id="mat-ehull-slope" type="number" value="20" step="1"></label>
+          <label>charge penalty<input class="mini-input" id="mat-charge-penalty" type="number" value="0.10" step="0.01"></label>
+          <label>defect penalty<input class="mini-input" id="mat-defect-penalty" type="number" value="0.06" step="0.01"></label>
         </div>
       </div>
 
       <div style="margin-top:1rem">
         <button class="btn btn-primary" onclick="runScreening()">Screen Composition</button>
+        <button class="btn btn-ghost" onclick="loadDiagnosticsInMaterials()" type="button" style="margin-left:0.75rem">Load Diagnostics Composition</button>
         <button class="btn btn-ghost" onclick="exportMaterialsCSV()" type="button" style="margin-left:0.75rem">Download CSV</button>
         <button class="btn btn-ghost" onclick="exportMaterialsJSON()" type="button" style="margin-left:0.5rem">Download JSON</button>
         <button class="btn btn-ghost" onclick="generateReport()" type="button" style="margin-left:0.5rem">📄 Report</button>
@@ -701,6 +732,13 @@
           <label>acid order<input class="mini-input" id="rec-acid-order" type="number" value="0.95" step="0.05"></label>
           <label>Mn Ea J/mol<input class="mini-input" id="rec-ea-mn" type="number" value="27000" step="1000"></label>
         </div>
+        <div class="formula-note" style="font-size:0.62rem;color:#666;margin-top:0.35rem">Particles below roughly 25 um use a mixed surface/diffusion-control correction instead of pure surface-reaction control.</div>
+        <div class="knob-grid" style="margin-top:0.7rem">
+          <label>acid INR/kg<input class="mini-input" id="rec-acid-cost" type="number" value="8.5" step="0.5"></label>
+          <label>energy INR/kWh<input class="mini-input" id="rec-energy-cost" type="number" value="8.0" step="0.5"></label>
+          <label>process INR/kg<input class="mini-input" id="rec-processing-cost" type="number" value="150" step="5"></label>
+          <label>metal INR/kg<input class="mini-input" id="rec-metal-price" type="number" value="620" step="10"></label>
+        </div>
       </div>
 
       <div style="margin-top:1rem">
@@ -734,7 +772,7 @@
 <section class="section" id="sec-analytics">
   <div class="section-header">
     <h2>Analytics Suite</h2>
-    <p>Ragone plot, vehicle range estimator, electrolyte recommendation, and India regional climate stress — all API-backed.</p>
+    <p>Ragone plot, vehicle range estimator, electrolyte recommendation, and India regional climate stress from browser physics mirrors, with API endpoints available for deployment integrations.</p>
   </div>
 
   <div class="grid-2">
@@ -837,7 +875,7 @@
     <table class="tbl">
       <thead><tr><th>Source Zip</th><th>Artifacts Imported</th><th>Manifest</th></tr></thead>
       <tbody id="checkpoint-provenance-body">
-        <tr><td colspan="3">Run the API to load checkpoint provenance.</td></tr>
+        <tr><td>Static fallback</td><td>14 model cards visible immediately</td><td>Runtime scan updates this table when /api/models responds.</td></tr>
       </tbody>
     </table>
   </div>
@@ -889,9 +927,10 @@
           <tr><td>NASA PCoE</td><td>1,956</td><td>Impedance</td><td><span class="tag ok">Indexed</span></td></tr>
           <tr><td>ISU-ILCC</td><td>4,904,065</td><td>Time-series</td><td><span class="tag ok">Indexed</span></td></tr>
           <tr><td>UL_PUR</td><td>185,221</td><td>Cycle summary</td><td><span class="tag ok">Indexed</span></td></tr>
-          <tr><td>Real impedance summary</td><td>Indexed</td><td>EIS-derived table</td><td><span class="tag ok">Indexed</span></td></tr>
+          <tr><td>Real impedance summary</td><td>1,956</td><td>EIS-derived table</td><td><span class="tag ok">Indexed</span></td></tr>
         </tbody>
       </table>
+      <div class="plot-note">Row-count breadth is reported with cell and dataset counts because ISU-ILCC contributes most high-frequency samples.</div>
     </div>
 
     <div class="panel">
@@ -903,7 +942,7 @@
           <tr><td>P2-O2 Phase Transition</td><td>core/phase_transition.py</td><td><span class="tag ok">Active</span></td></tr>
           <tr><td>TGN BMS Graph</td><td>modules/bms/graph_node.py</td><td><span class="tag ok">Active</span></td></tr>
           <tr><td>EIS Extractor</td><td>modules/bms/eis_feature_extractor.py</td><td><span class="tag ok">Active</span></td></tr>
-          <tr><td>qNEHVI Screener</td><td>modules/cathode/screener.py</td><td><span class="tag ok">Active</span></td></tr>
+          <tr><td>qNEHVI-style Screener</td><td>modules/cathode/screener.py</td><td><span class="tag ok">Active</span></td></tr>
           <tr><td>Bayesian Recycling</td><td>modules/recycling/closed_loop_optimizer.py</td><td><span class="tag ok">Active</span></td></tr>
           <tr><td>Stochastic Blender</td><td>modules/recycling/stochastic_blender.py</td><td><span class="tag ok">Active</span></td></tr>
           <tr><td>Regional Climate</td><td>core/regional_climate.py</td><td><span class="tag ok">Active</span></td></tr>
@@ -933,7 +972,7 @@
         <tr><td>EIS-to-SOH TinyTCN</td><td>Uses impedance features that move before capacity drops.</td><td>4h</td><td>Rct/RSEI/Warburg calibrated SOH + risk head</td></tr>
         <tr><td>UDE Residual Calibrator</td><td>Fits only missing physics, keeping Arrhenius/P2/JT terms explicit.</td><td>6h</td><td>Small residual model with mechanism attribution</td></tr>
         <tr><td>Thermal Pack Surrogate</td><td>Calibrates the pack-risk model on generated thermal ODE cases until real pack labels exist.</td><td>6h</td><td>Low-latency BMS risk surrogate</td></tr>
-        <tr><td>qNEHVI Candidate Expansion</td><td>More useful than another generic NN: it improves which materials to synthesize next.</td><td>4h</td><td>Ranked cathode queue with uncertainty</td></tr>
+        <tr><td>qNEHVI Candidate Expansion</td><td>Runs the full BoTorch acquisition path beyond the browser's qNEHVI-style proxy.</td><td>4h</td><td>Ranked cathode queue with uncertainty</td></tr>
       </tbody>
     </table>
   </div>
@@ -983,26 +1022,26 @@
     <div class="assistant-head">
       <div>
         <div class="assistant-title">KineticsForge Assist</div>
-        <div class="assistant-status"><span class="mini-dot"></span> Memory off</div>
+        <div class="assistant-status"><span class="mini-dot"></span> Browser context on, server memory off</div>
       </div>
       <button class="assistant-close" id="assistant-close" type="button" title="Close assistant" aria-label="Close assistant">x</button>
     </div>
     <div class="assistant-body" id="assistant-body">
       <div class="assistant-msg bot">Ask about a highlighted cell, a plot, an equation, or what to change next.</div>
       <div class="assistant-prompts">
-        <button type="button" data-q="How do I use this app?">Use app</button>
-        <button type="button" data-q="Explain the lattice phase stability and dopant effects">Lattice stability</button>
-        <button type="button" data-q="What does the radar chart show about my composition?">Radar chart</button>
-        <button type="button" data-q="Run a Ragone analysis for my current cathode">Ragone analysis</button>
-        <button type="button" data-q="Compare climate stress across Indian cities">Climate stress</button>
-        <button type="button" data-q="What should I validate before making strong claims?">Validation</button>
+        <button type="button" data-q="What should I do next from the current outputs?">Next action</button>
+        <button type="button" data-q="Why is the dominant degradation mechanism winning in my current run?">Why dominant?</button>
+        <button type="button" data-q="Which composition parameter should I change first?">Change what?</button>
+        <button type="button" data-q="What does the Ragone curve imply for the current cathode?">Ragone meaning</button>
+        <button type="button" data-q="Which Indian climate region is hardest on this setup?">Hardest climate</button>
+        <button type="button" data-q="What should I validate before making strong claims?">Validate claims</button>
       </div>
     </div>
     <form class="assistant-form" id="assistant-form">
       <input id="assistant-input" type="text" maxlength="1200" autocomplete="off" placeholder="Ask KineticsForge..." aria-label="Ask KineticsForge">
       <button type="submit">Send</button>
     </form>
-    <div class="assistant-foot" id="assistant-foot"><span id="assistant-source-badge"></span> Cloud · <span id="assistant-model-label">OpenRouter</span> · <span id="assistant-memory-label">memory off</span></div>
+    <div class="assistant-foot" id="assistant-foot"><span id="assistant-source-badge"></span> Cloud · <span id="assistant-model-label">model shown after reply</span> · <span id="assistant-memory-label">browser context only</span></div>
   </div>
 </div>
 

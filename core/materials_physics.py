@@ -374,6 +374,8 @@ def score_composition(
         "fade": _num(knobs.get("w_fade", knobs.get("wFade")), 0.22),
         "cost": _num(knobs.get("w_cost", knobs.get("wCost")), 0.14),
     }
+    charge_penalty = max(0.0, _num(knobs.get("charge_penalty", knobs.get("chargePenalty")), 0.10))
+    defect_penalty = max(0.0, _num(knobs.get("defect_penalty", knobs.get("defectPenalty")), 0.06))
 
     na, mn, fe = norm["Na"], norm["Mn"], norm["Fe"]
     dop_charge = sum(frac * DOPANTS.get(el, {}).get("valence", 3.0) for el, frac in norm["dopants"].items())
@@ -412,7 +414,8 @@ def score_composition(
     energy_density = q0 * avg_voltage
 
     p2_crit_v = 4.04 + 0.12 * fe + 0.18 * phase_stabilization - 0.13 * mn3_fraction - 0.08 * max(0.0, 0.78 - na)
-    p2_o2_risk = clamp(sigmoid((upper_v - p2_crit_v) / 0.075) * (0.35 + 0.65 * sigmoid((0.86 - na) / 0.12)) * (1.0 - 0.52 * p2_suppression), 0.0, 1.0)
+    na_p2_weight = 0.35 + (1.0 - 0.35) * sigmoid((0.86 - na) / 0.12)
+    p2_o2_risk = clamp(sigmoid((upper_v - p2_crit_v) / 0.075) * na_p2_weight * (1.0 - 0.52 * p2_suppression), 0.0, 1.0)
     jt_index = clamp(mn * mn3_fraction * (1.0 - 0.55 * jt_suppression) * (1.0 + 0.18 * sigmoid((upper_v - 4.05) / 0.10)), 0.0, 1.0)
     oxygen_risk = clamp(
         0.12
@@ -496,8 +499,8 @@ def score_composition(
         + weights["stability"] * stability
         + weights["fade"] * (1.0 - fade_500)
         + weights["cost"] * clamp(1.0 - cost_kwh / 220.0, 0.0, 1.0)
-        - 0.10 * charge_balance_risk
-        - 0.06 * norm["site_error_abs"]
+        - charge_penalty * charge_balance_risk
+        - defect_penalty * (1.0 - defect_score)
     )
 
     if p2_o2_risk > 0.62:
