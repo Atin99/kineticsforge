@@ -1171,3 +1171,86 @@ input[type="range"]::-webkit-slider-thumb:hover {
   color: var(--text-dim);
   border-top: 1px solid var(--glass-border);
 }
+
+/* ── LATTICE VISUALIZER ────────────────────────── */
+.lattice-container {
+  background: #0a0a0a;
+  border-radius: var(--radius);
+  border: 1px solid rgba(255,26,26,0.12);
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.lattice-container::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,26,26,0.25), transparent);
+}
+
+/* ── RADAR CHART ───────────────────────────────── */
+#radar-chart {
+  filter: drop-shadow(0 0 6px rgba(255,26,26,0.15));
+}
+
+/* ── SOURCE BADGE ──────────────────────────────── */
+.source-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.54rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.source-badge.cloud {
+  background: rgba(56,189,248,0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56,189,248,0.25);
+}
+
+.source-badge.local {
+  background: rgba(234,179,8,0.12);
+  color: #eab308;
+  border: 1px solid rgba(234,179,8,0.2);
+}
+
+/* ── SELECT DROPDOWN ───────────────────────────── */
+select.mini-input {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23ff3333'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 20px;
+  cursor: pointer;
+}
+
+/* ── ANALYTICS CARD HOVER ──────────────────────── */
+.knob-grid label {
+  transition: color var(--transition);
+}
+
+.knob-grid label:hover {
+  color: var(--text);
+}
+
+.knob-grid label:hover .mini-input {
+  border-color: rgba(255,26,26,0.35);
+}
+
+/* ── TARGET LINE DASHED ────────────────────────── */
+.target-indicator {
+  position: absolute;
+  left: 52px; right: 18px;
+  height: 1px;
+  border-top: 1px dashed rgba(255,26,26,0.5);
+  pointer-events: none;
+}

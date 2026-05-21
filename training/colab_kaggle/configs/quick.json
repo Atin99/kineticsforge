@@ -1,8 +1,0 @@
-{
-  "profile": "quick",
-  "target_runtime": "5-15 minutes",
-  "device": "auto",
-  "data_profile": "smoke",
-  "training_profile": "quick",
-  "notes": "Use for compile and loader checks before spending Kaggle GPU time."
-}

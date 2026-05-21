@@ -526,6 +526,35 @@ def _direct_ui_answer(question: str, state: Optional[Dict[str, Any]]) -> Optiona
             "The composition landscape sweeps Na and Mn while Fe is adjusted by charge balance. Height and color are the objective score, so peaks are better synthesis candidates under the current weights."
         )
 
+    if any(term in q for term in ["lattice", "crystal", "phase structure", "spacing", "dopant", "al³⁺", "ti⁴⁺", "collapse", "stability plot"]):
+        if mat:
+            na = _as_float(mat.get("comp", {}).get("Na", 1.0))
+            mn = _as_float(mat.get("comp", {}).get("Mn", 0.5))
+            al = bool(mat.get("comp", {}).get("al", False))
+            ti = bool(mat.get("comp", {}).get("ti", False))
+            collapse = max(0.0, 0.95 - na) * (0.2 if al else 1.0)
+            jt = max(0.0, mn - 0.48) * (0.3 if ti else 1.0)
+            phase = "P2 Layered Phase"
+            if collapse > 0.08:
+                phase = "O2 Collapse (low Na)"
+            elif jt > 0.08:
+                phase = "JT Jahn-Teller Distortion"
+            spacing = 5.62 - collapse * 0.45
+            return (
+                f"The crystal lattice simulation displays the P2/O2 layered oxide structure. "
+                f"Currently, estimated lattice spacing is {spacing:.2f} Å and structure phase is {phase}. "
+                f"Doping: Al (pillaring) is {'enabled' if al else 'disabled'}, Ti (JT mitigation) is {'enabled' if ti else 'disabled'}."
+            )
+        return "The crystal lattice simulation draws the transition metal sheets (Mn/Fe/Al/Ti) and interlayer Na gallery, showing O2 collapse at low Na and Jahn-Teller distortion at high Mn, mitigated by Al and Ti doping."
+
+    if any(term in q for term in ["c-rate sweep", "cell mass", "target range", "motor power", "temp offset", "charge stress", "customiz", "sweep option"]):
+        return (
+            "Customizable analytics inputs are now active: "
+            "(1) Ragone plot sweeps C-rate (adjustable up to max value, e.g. 5C) and adjusts cell mass (default 120g) to compute cell energy; "
+            "(2) Range estimator matches SOH degradation against target range (default 600km) and motor power (default 150kW) to estimate range surplus/deficit and specific power; "
+            "(3) Climate profiles accept offset temperature and charge rate stress to compute regional thermal kinetics."
+        )
+
     if any(term in q for term in ["material", "composition", "cathode", "synthesis", "oxygen risk", "charge"]):
         if mat:
             fade500 = _as_float(mat.get("fade500_pct", mat.get("fade500")))

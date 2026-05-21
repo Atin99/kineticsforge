@@ -68,7 +68,8 @@ function setReadouts(id, items) {
   var el = document.getElementById(id);
   if (!el) return;
   el.innerHTML = items.map(function (it) {
-    return '<div class="readout"><div class="k">' + escapeHtml(it.k) + '</div><div class="v">' + escapeHtml(it.v) + '</div></div>';
+    var val = it.html ? it.v : escapeHtml(it.v);
+    return '<div class="readout"><div class="k">' + escapeHtml(it.k) + '</div><div class="v">' + val + '</div></div>';
   }).join("");
 }
 function downloadCSV(rows, filename) {
@@ -2122,10 +2123,317 @@ function paretoMark(items) {
   }
 }
 
+function drawAtom(ctx, x, y, type) {
+  ctx.beginPath();
+  var r = 5;
+  var color = "#ff1a1a";
+  if (type === "Mn") { color = "#ff5c5c"; r = 6; }
+  else if (type === "Fe") { color = "#ec4899"; r = 6; }
+  else if (type === "Al") { color = "#3b82f6"; r = 5.5; }
+  else if (type === "Ti") { color = "#10b981"; r = 5.5; }
+  else if (type === "Na") { color = "#eab308"; r = 4; }
+
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Glow
+  if (type === "Al" || type === "Ti") {
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.arc(x, y, r - 1, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+}
+
+function drawLegendAtom(ctx, x, y, type, label) {
+  drawAtom(ctx, x, y, type);
+  ctx.fillStyle = "#aaa";
+  ctx.font = "9px JetBrains Mono, monospace";
+  ctx.fillText(label, x + 10, y + 3);
+}
+
+function drawLatticeSimulation(selected) {
+  var cv = document.getElementById("lattice-canvas");
+  if (!cv) return;
+  var ctx = cv.getContext("2d");
+  var W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+
+  var na = selected.Na;
+  var mn = selected.Mn;
+  var fe = selected.Fe;
+  var al = selected.al;
+  var ti = selected.ti;
+
+  // Compute stability metrics
+  var jtDist = Math.max(0, mn - 0.48) * (ti ? 0.3 : 1.0);
+  var collapse = Math.max(0, 0.95 - na) * (al ? 0.2 : 1.0);
+
+  // Background grid
+  ctx.strokeStyle = "rgba(255,255,255,0.03)";
+  ctx.lineWidth = 1;
+  for (var i = 0; i < W; i += 20) {
+    ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, H); ctx.stroke();
+  }
+
+  var cols = 8;
+  var dx = W / (cols + 1);
+
+  // Draw bonds (Background bonds first)
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.lineWidth = 1.5;
+  for (var c = 0; c < cols; c++) {
+    var x = dx * (c + 1);
+    var yTop = 35 + collapse * 15;
+    var yBot = 115 - collapse * 15;
+    
+    // Lattice distortion offset
+    var jitterTop = (Math.sin(c * 2) * jtDist * 8);
+    var jitterBot = (Math.cos(c * 2) * jtDist * 8);
+
+    ctx.beginPath();
+    ctx.moveTo(x, yTop + jitterTop);
+    ctx.lineTo(x, yBot + jitterBot);
+    ctx.stroke();
+
+    // Horizontal top bonds
+    if (c < cols - 1) {
+      var nextX = dx * (c + 2);
+      var nextJitterTop = (Math.sin((c + 1) * 2) * jtDist * 8);
+      ctx.beginPath();
+      ctx.moveTo(x, yTop + jitterTop);
+      ctx.lineTo(nextX, yTop + nextJitterTop);
+      ctx.stroke();
+
+      var nextJitterBot = (Math.cos((c + 1) * 2) * jtDist * 8);
+      ctx.beginPath();
+      ctx.moveTo(x, yBot + jitterBot);
+      ctx.lineTo(nextX, yBot + nextJitterBot);
+      ctx.stroke();
+    }
+  }
+
+  // Draw Atoms
+  for (var c = 0; c < cols; c++) {
+    var x = dx * (c + 1);
+    var yTop = 35 + collapse * 15;
+    var yBot = 115 - collapse * 15;
+    var jitterTop = (Math.sin(c * 2) * jtDist * 8);
+    var jitterBot = (Math.cos(c * 2) * jtDist * 8);
+
+    var topType = "Mn";
+    if (c % 2 === 1) topType = "Fe";
+    if (al && c === 2) topType = "Al";
+    if (ti && c === 5) topType = "Ti";
+
+    var botType = "Fe";
+    if (c % 2 === 1) botType = "Mn";
+    if (al && c === 6) botType = "Al";
+    if (ti && c === 1) botType = "Ti";
+
+    drawAtom(ctx, x, yTop + jitterTop, topType);
+    drawAtom(ctx, x, yBot + jitterBot, botType);
+
+    // Sodium Ions in the gallery
+    var showNa = (c / cols) < na;
+    if (showNa) {
+      var naY = (yTop + yBot) / 2 + (Math.sin(c * 5) * 2);
+      drawAtom(ctx, x + dx/2, naY, "Na");
+    }
+  }
+
+  // Draw legend
+  ctx.font = "9px JetBrains Mono, monospace";
+  var legX = 12;
+  var legY = H - 12;
+  drawLegendAtom(ctx, legX, legY, "Mn", "Mn");
+  drawLegendAtom(ctx, legX + 50, legY, "Fe", "Fe");
+  drawLegendAtom(ctx, legX + 100, legY, "Na", "Na (gallery)");
+  if (al) drawLegendAtom(ctx, legX + 200, legY, "Al", "Al (pillar)");
+  if (ti) drawLegendAtom(ctx, legX + 280, legY, "Ti", "Ti (dopant)");
+
+  var phaseName = "P2 Layered Phase";
+  var phaseColor = "#22c55e";
+  if (collapse > 0.08) {
+    phaseName = "O2 Collapse (low Na)";
+    phaseColor = "#ff1a1a";
+  } else if (jtDist > 0.08) {
+    phaseName = "JT Jahn-Teller Distortion";
+    phaseColor = "#ff9f1a";
+  }
+
+  var naGalleryPct = Math.round(clamp(na, 0, 1.2) / 1.2 * 100);
+  setReadouts("lattice-readout", [
+    { k: "Lattice Spacing", v: (5.62 - collapse * 0.45).toFixed(2) + " Å" },
+    { k: "Structure Phase", v: '<span style="color:' + phaseColor + ';font-weight:700">' + phaseName + '</span>', html: true },
+    { k: "Na Gallery", v: naGalleryPct + "% occupied" }
+  ]);
+}
+
+// ── Radar Chart for Composition Quality ─────────────────────────────────
+function drawRadarChart(props) {
+  var cv = document.getElementById("radar-chart");
+  if (!cv) return;
+  var ctx = cv.getContext("2d");
+  var W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+  var cx = W / 2, cy = H / 2 + 5;
+  var R = Math.min(cx, cy) - 35;
+  var axes = [
+    { label: "Capacity", value: clamp((props.Q0 - 80) / 130, 0, 1) },
+    { label: "Stability", value: clamp(props.stability, 0, 1) },
+    { label: "Fade Resist", value: clamp(1 - props.fade500, 0, 1) },
+    { label: "Cost Effic.", value: clamp(1 - props.costKwh / 200, 0, 1) },
+    { label: "O₂ Safety", value: clamp(1 - props.oxygenRisk, 0, 1) },
+    { label: "Charge Bal.", value: clamp(1 - props.chargeRisk, 0, 1) }
+  ];
+  var n = axes.length;
+  var angleStep = (2 * Math.PI) / n;
+  // Draw grid rings
+  [0.25, 0.5, 0.75, 1.0].forEach(function (frac) {
+    ctx.beginPath();
+    for (var i = 0; i <= n; i++) {
+      var a = -Math.PI / 2 + i * angleStep;
+      var x = cx + Math.cos(a) * R * frac;
+      var y = cy + Math.sin(a) * R * frac;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = "rgba(255,255,255," + (frac === 1 ? 0.12 : 0.06) + ")";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  });
+  // Draw axis lines + labels
+  ctx.font = "9px Inter, sans-serif";
+  ctx.textAlign = "center";
+  axes.forEach(function (ax, i) {
+    var a = -Math.PI / 2 + i * angleStep;
+    var ex = cx + Math.cos(a) * R;
+    var ey = cy + Math.sin(a) * R;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(ex, ey);
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.stroke();
+    var lx = cx + Math.cos(a) * (R + 22);
+    var ly = cy + Math.sin(a) * (R + 22);
+    ctx.fillStyle = "#888";
+    ctx.fillText(ax.label, lx, ly + 3);
+  });
+  // Draw filled polygon
+  ctx.beginPath();
+  axes.forEach(function (ax, i) {
+    var a = -Math.PI / 2 + i * angleStep;
+    var r = R * ax.value;
+    var x = cx + Math.cos(a) * r;
+    var y = cy + Math.sin(a) * r;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.closePath();
+  ctx.fillStyle = "rgba(255,26,26,0.18)";
+  ctx.fill();
+  ctx.strokeStyle = "#ff1a1a";
+  ctx.lineWidth = 2;
+  ctx.shadowColor = "#ff1a1a";
+  ctx.shadowBlur = 8;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  // Draw value dots
+  axes.forEach(function (ax, i) {
+    var a = -Math.PI / 2 + i * angleStep;
+    var r = R * ax.value;
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(a) * r, cy + Math.sin(a) * r, 3, 0, Math.PI * 2);
+    ctx.fillStyle = "#fff";
+    ctx.fill();
+  });
+}
+
+// ── Cycle Life Degradation Curve ────────────────────────────────────────
+function drawCycleLifeCurve(props) {
+  var cv = makeCanvas("cycle-life-chart");
+  if (!cv) return;
+  var stab = clamp(props.stability || 0.5, 0, 1);
+  var fade = clamp(props.fade500 || 0.15, 0, 1);
+  var jtIdx = clamp(props.jtIndex || 0.5, 0, 1);
+  // Simulate capacity retention over 1000 cycles
+  var pts = [];
+  var cap = 1.0;
+  var baseRate = 0.00005 + fade * 0.0003;
+  var kneePoint = Math.round(400 + stab * 600 - jtIdx * 200);
+  kneePoint = clamp(kneePoint, 200, 900);
+  for (var c = 0; c <= 1000; c += 5) {
+    var rate = baseRate;
+    if (c > kneePoint) {
+      rate += (c - kneePoint) * 0.0000008 * (1 + fade * 2);
+    }
+    cap = Math.max(0.5, cap - rate);
+    pts.push(cap);
+  }
+  // Draw using drawMultiLine
+  var eolIdx = pts.findIndex(function (v) { return v < 0.8; });
+  var eolCycle = eolIdx >= 0 ? eolIdx * 5 : 1000;
+  drawMultiLine(cv, [
+    { name: "Capacity", values: pts, color: "#22c55e", glow: true }
+  ], {
+    yMin: 0.5, yMax: 1.05, title: "Capacity retention vs cycles (simulated)",
+    xMax: 1000, yDigits: 2, legend: false
+  });
+  // Draw 80% EOL line
+  var ctx = cv.getContext("2d");
+  var W = cv.width, H = cv.height;
+  var pad = { t: 28, r: 18, b: 34, l: 52 };
+  var pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+  var y80 = pad.t + ph - (0.8 - 0.5) / (1.05 - 0.5) * ph;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(pad.l, y80);
+  ctx.lineTo(pad.l + pw, y80);
+  ctx.strokeStyle = "rgba(255,26,26,0.5)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#ff1a1a";
+  ctx.font = "9px JetBrains Mono, monospace";
+  ctx.fillText("80% EOL", pad.l + pw - 50, y80 - 4);
+  // Draw knee point marker
+  if (kneePoint < 1000) {
+    var kx = pad.l + (kneePoint / 1000) * pw;
+    ctx.beginPath();
+    ctx.moveTo(kx, pad.t);
+    ctx.lineTo(kx, pad.t + ph);
+    ctx.strokeStyle = "rgba(234,179,8,0.4)";
+    ctx.setLineDash([3, 3]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#eab308";
+    ctx.fillText("knee", kx + 4, pad.t + 12);
+  }
+  setReadouts("cycle-life-readout", [
+    { k: "Knee Point", v: kneePoint + " cycles" },
+    { k: "EOL (80%)", v: eolCycle >= 1000 ? ">1000 cycles" : eolCycle + " cycles" },
+    { k: "Fade@500", v: (100 * fade).toFixed(1) + "%" },
+    { k: "Final Cap", v: (pts[pts.length - 1] * 100).toFixed(1) + "%" }
+  ]);
+}
+
 function updateMat() {
-  document.getElementById("na-val").textContent = parseFloat(document.getElementById("na-slider").value).toFixed(2);
-  document.getElementById("mn-val").textContent = parseFloat(document.getElementById("mn-slider").value).toFixed(2);
-  document.getElementById("fe-val").textContent = parseFloat(document.getElementById("fe-slider").value).toFixed(2);
+  var selected = {
+    Na: parseFloat(document.getElementById("na-slider").value),
+    Mn: parseFloat(document.getElementById("mn-slider").value),
+    Fe: parseFloat(document.getElementById("fe-slider").value),
+    al: document.getElementById("sw-al").checked,
+    ti: document.getElementById("sw-ti").checked
+  };
+  document.getElementById("na-val").textContent = selected.Na.toFixed(2);
+  document.getElementById("mn-val").textContent = selected.Mn.toFixed(2);
+  document.getElementById("fe-val").textContent = selected.Fe.toFixed(2);
+  drawLatticeSimulation(selected);
 }
 
 function runScreening() {
@@ -2141,6 +2449,9 @@ function runScreening() {
   var items = generateCandidates(selected, cfg);
   items.push({ comp: selected, prop: selectedProp, selected: true });
   paretoMark(items);
+  drawLatticeSimulation(selected);
+  drawRadarChart(selectedProp);
+  drawCycleLifeCurve(selectedProp);
   document.getElementById("mat-cap").textContent = selectedProp.Q0.toFixed(0);
   document.getElementById("mat-volt").textContent = selectedProp.avgVoltage.toFixed(2) + "V";
   document.getElementById("mat-stab").textContent = selectedProp.stability.toFixed(2);
@@ -2409,17 +2720,21 @@ function assistantMessage(kind, text, meta) {
 }
 
 function updateAssistantFoot(data) {
-  var foot = document.getElementById("assistant-foot");
-  if (!foot) return;
+  var badge = document.getElementById("assistant-source-badge");
+  var modelEl = document.getElementById("assistant-model-label");
+  var memEl = document.getElementById("assistant-memory-label");
+  if (!badge || !modelEl || !memEl) return;
   if (!data) {
-    foot.textContent = "Cloud assistant uses server-side OpenRouter. Memory off.";
+    badge.innerHTML = '<span class="source-badge local">offline</span>';
+    modelEl.textContent = "no connection";
+    memEl.textContent = "memory off";
     return;
   }
-  var source = data.source === "openrouter" ? "Cloud" : "Compact fallback";
-  var model = data.model && data.model !== "none" ? " · " + data.model : "";
-  var setup = data.setup_required ? " · add OPENROUTER_API_KEY for cloud mode" : "";
-  var memory = data.memory && data.memory !== "off" ? " · local context" : " · memory off";
-  foot.textContent = source + model + memory + setup;
+  var isCloud = data.source === "openrouter";
+  badge.innerHTML = '<span class="source-badge ' + (isCloud ? "cloud" : "local") + '">' + (isCloud ? "cloud" : "local") + '</span>';
+  modelEl.textContent = data.model && data.model !== "none" ? data.model : (isCloud ? "OpenRouter" : "rule engine");
+  memEl.textContent = data.memory && data.memory !== "off" ? "context on" : "memory off";
+  if (data.setup_required) memEl.textContent += " · needs API key";
 }
 
 function rememberAssistantTurn(role, text) {
@@ -3057,6 +3372,302 @@ function computeUploadConfidence(byod) {
   conf = clamp(conf, 0.15, 0.90);
   var detail = "Model " + Math.round(modelConf * 100) + "%, feature coverage " + Math.round(availability * 100) + "%, schema " + Math.round(schemaScore * 100) + "%, warnings " + warnings + ".";
   return { confidence: conf, detail: detail };
+}
+
+// ── Ragone Plot (Energy vs Power density) ──────────────────────────────
+function runRagone() {
+  var na = num("na-slider", 1.0);
+  var mn = num("mn-slider", 0.5);
+  var fe = num("fe-slider", 0.5);
+  var maxCr = num("ragone-max-cr", 5.0);
+  var cellMassG = num("ragone-cell-mass", 120);
+  var pts = [];
+  for (var cr = 0.1; cr <= maxCr; cr += (maxCr / 30)) {
+    var q0 = (120 + 40 * mn - 20 * fe) * (1 - 0.5 * Math.abs(na - 1.0));
+    var ratePenalty = 1 / (1 + 0.12 * Math.pow(cr, 1.4));
+    var qEff = q0 * ratePenalty;
+    var feW = fe / Math.max(mn + fe, 0.01);
+    var mnW = mn / Math.max(mn + fe, 0.01);
+    var vAvg = mnW * 3.75 + feW * 3.20 + 0.15 * (1.0 - na);
+    var vDrop = 0.08 * cr;
+    var vEff = Math.max(2.0, vAvg - vDrop);
+    var energy = qEff * vEff;
+    var power = qEff * cr * vEff;
+    pts.push({ cRate: cr, energy: energy, power: power });
+  }
+  window.__kfRagone = pts;
+  var cv = makeCanvas("ragone-chart");
+  if (cv) {
+    drawRagonePlot(cv, pts);
+  }
+  var best = pts.reduce(function (a, b) { return a.energy > b.energy ? a : b; });
+  var peakPower = pts.reduce(function (a, b) { return a.power > b.power ? a : b; });
+  var cellEnergyWh = best.energy * cellMassG / 1000;
+  setReadouts("ragone-readout", [
+    { k: "Peak Energy", v: best.energy.toFixed(1) + " Wh/kg" },
+    { k: "Cell Energy", v: cellEnergyWh.toFixed(2) + " Wh" },
+    { k: "Peak Power", v: peakPower.power.toFixed(1) + " W/kg" },
+    { k: "Cell Peak Pwr", v: (peakPower.power * cellMassG / 1000).toFixed(1) + " W" }
+  ]);
+  showToast("Ragone plot computed up to " + maxCr.toFixed(1) + "C.", "ok");
+}
+
+function drawRagonePlot(cv, pts) {
+  if (!cv || !pts.length) return;
+  var ctx = cv.getContext("2d");
+  var W = cv.width, H = cv.height;
+  var p = { t: 28, r: 18, b: 34, l: 52 };
+  var pw = W - p.l - p.r, ph = H - p.t - p.b;
+  var xs = pts.map(function (pt) { return pt.power; });
+  var ys = pts.map(function (pt) { return pt.energy; });
+  var xMn = 0, xMx = Math.max.apply(null, xs) * 1.1;
+  var yMn = Math.min.apply(null, ys) * 0.9, yMx = Math.max.apply(null, ys) * 1.05;
+  ctx.clearRect(0, 0, W, H);
+  drawGrid(ctx, p, pw, ph);
+  // Fill area under curve
+  ctx.beginPath();
+  pts.forEach(function (pt, i) {
+    var x = p.l + (pt.power - xMn) / (xMx - xMn) * pw;
+    var y = p.t + ph - (pt.energy - yMn) / (yMx - yMn) * ph;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.lineTo(p.l + (pts[pts.length - 1].power - xMn) / (xMx - xMn) * pw, p.t + ph);
+  ctx.lineTo(p.l, p.t + ph);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(255,26,26,0.08)";
+  ctx.fill();
+  // Draw line
+  ctx.beginPath();
+  pts.forEach(function (pt, i) {
+    var x = p.l + (pt.power - xMn) / (xMx - xMn) * pw;
+    var y = p.t + ph - (pt.energy - yMn) / (yMx - yMn) * ph;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = "#ff1a1a";
+  ctx.lineWidth = 2.5;
+  ctx.shadowColor = "#ff1a1a";
+  ctx.shadowBlur = 10;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  // Draw points at key C-rates
+  var maxCr = pts[pts.length - 1].cRate;
+  var sweepPoints = [0.2, 0.5, 1.0, 2.0, 3.0, 5.0].filter(function(v) { return v <= maxCr; });
+  sweepPoints.forEach(function (target) {
+    var closest = pts.reduce(function (a, b) { return Math.abs(a.cRate - target) < Math.abs(b.cRate - target) ? a : b; });
+    var x = p.l + (closest.power - xMn) / (xMx - xMn) * pw;
+    var y = p.t + ph - (closest.energy - yMn) / (yMx - yMn) * ph;
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#888";
+    ctx.font = "9px JetBrains Mono, monospace";
+    ctx.fillText(target + "C", x + 6, y - 6);
+  });
+  ctx.fillStyle = "#777";
+  ctx.font = "10px JetBrains Mono, monospace";
+  ctx.fillText("Ragone: Energy vs Power Density", p.l + 6, 15);
+  ctx.fillText("Power (W/kg)", p.l + pw / 2 - 30, H - 6);
+  ctx.fillText("E", 4, p.t + ph / 2);
+}
+
+function exportRagoneCSV() {
+  var pts = window.__kfRagone;
+  if (!pts || !pts.length) { showToast("Run Ragone first.", "warn"); return; }
+  downloadCSV(pts.map(function (pt) {
+    return { c_rate: pt.cRate.toFixed(2), energy_wh_kg: pt.energy.toFixed(1), power_w_kg: pt.power.toFixed(1) };
+  }), "kineticsforge_ragone.csv");
+}
+
+// ── Vehicle Range Estimator ────────────────────────────────────────────
+function runRangeEstimate() {
+  var soh = num("range-soh", 1.0);
+  var energyWhKg = num("range-energy", 250);
+  var packKg = num("range-pack-kg", 495);
+  var effKwhPer100km = num("range-eff", 15);
+  var targetRangeKm = num("range-target", 600);
+  var motorKw = num("range-motor-kw", 150);
+
+  // Sweep over SOH 0.5-1.0
+  var pts = [];
+  for (var s = 1.0; s >= 0.5; s -= 0.02) {
+    var usableKwh = s * energyWhKg * packKg / 1000;
+    var rangeKm = usableKwh / effKwhPer100km * 100;
+    pts.push({ soh: s, range_km: rangeKm, usable_kwh: usableKwh });
+  }
+  window.__kfRange = pts;
+  var current = pts.find(function (p) { return Math.abs(p.soh - soh) < 0.015; }) || pts[0];
+  var cv = makeCanvas("range-chart");
+  if (cv) {
+    drawMultiLine(cv, [{ name: "range", values: pts.map(function (p) { return p.range_km; }), color: "#22c55e", glow: true }], {
+      yMin: 0, xMax: 100, title: "Estimated range (km) vs SOH degradation", yDigits: 0,
+      points: [{ x: (1 - soh) / 0.5 * 100, y: current.range_km }], pointColor: "#ffffff"
+    });
+  }
+  var rangeDiff = current.range_km - targetRangeKm;
+  var pwrToWt = motorKw / (packKg / 1000); // Specific power (kW/ton or W/g)
+  setReadouts("range-readout", [
+    { k: "Current Range", v: current.range_km.toFixed(1) + " km" },
+    { k: "Usable kWh", v: current.usable_kwh.toFixed(1) + " kWh" },
+    { k: "vs Target", v: (rangeDiff >= 0 ? "+" : "") + rangeDiff.toFixed(0) + " km" },
+    { k: "Specific Power", v: pwrToWt.toFixed(1) + " W/g" }
+  ]);
+  showToast("Range: " + current.range_km.toFixed(0) + " km vs target " + targetRangeKm + " km.", "ok");
+}
+
+// ── Electrolyte Recommendation ─────────────────────────────────────────
+function runElectrolyteRecommend() {
+  var na = num("na-slider", 1.0);
+  var mn = num("mn-slider", 0.5);
+  var fe = num("fe-slider", 0.5);
+  var el = document.getElementById("electrolyte-result");
+  if (!el) return;
+  // Local rule engine (mirrors backend)
+  var electrolyte, additives, rationale;
+  if (na >= 1.0 && mn >= 0.5) {
+    electrolyte = "Carbonate (EC/EMC) with 1.0 M NaPF₆";
+    additives = ["FEC (2 wt%)", "VC (1 wt%)"];
+    rationale = "High-Na P2 layered oxide with significant Mn — carbonate electrolyte with fluorinated additive for stable CEI formation.";
+  } else if (fe > mn) {
+    electrolyte = "Ether-based (DEGDME) with 1.0 M NaTFSI";
+    additives = ["Fluoroethylene carbonate (3 wt%)"];
+    rationale = "Fe-rich cathode benefits from ether solvation shell — better Na+ desolvation kinetics at the Fe³⁺/²⁺ redox couple.";
+  } else if (na < 0.9) {
+    electrolyte = "Concentrated (3.5 M) NaFSI in DME";
+    additives = ["No additional additives needed"];
+    rationale = "Na-deficient cathode is moisture-sensitive — concentrated electrolyte reduces free solvent and parasitic water reaction.";
+  } else {
+    electrolyte = "Carbonate (EC/PC, 1:1) with 1.0 M NaClO₄";
+    additives = ["FEC (5 wt%)", "Succinonitrile (1 wt%)"];
+    rationale = "Balanced Mn/Fe composition — standard carbonate with FEC for anode passivation and succinonitrile for oxidative stability.";
+  }
+  var html = '<div style="padding:0.5rem">';
+  html += '<div style="margin-bottom:0.5rem"><span style="color:#22c55e;font-weight:700">✓ Recommended Electrolyte</span></div>';
+  html += '<div style="font-size:0.82rem;color:#e8e8e8;font-weight:600;margin-bottom:0.4rem">' + escapeHtml(electrolyte) + '</div>';
+  html += '<div style="font-size:0.72rem;color:#aaa;margin-bottom:0.5rem"><strong>Additives:</strong> ' + additives.map(escapeHtml).join(", ") + '</div>';
+  html += '<div style="font-size:0.68rem;color:#666;border-left:2px solid #ff1a1a;padding-left:0.6rem">' + escapeHtml(rationale) + '</div>';
+  html += '<div style="margin-top:0.6rem;font-size:0.64rem;color:#555">Composition: Na=' + na.toFixed(2) + ' Mn=' + mn.toFixed(2) + ' Fe=' + fe.toFixed(2) + '</div>';
+  html += '</div>';
+  el.innerHTML = html;
+  showToast("Electrolyte: " + electrolyte.split("with")[0].trim(), "ok");
+}
+
+// ── Regional Climate Stress Profiles ───────────────────────────────────
+var CLIMATE_SEEDS = {
+  delhi_hot: { name: "Delhi", meanT: 29, seasonAmp: 12, diurnalAmp: 6.5, meanRH: 46, monsoonAmp: 28 },
+  chennai_coastal: { name: "Chennai", meanT: 29, seasonAmp: 4, diurnalAmp: 3.2, meanRH: 72, monsoonAmp: 16 },
+  mumbai_monsoon: { name: "Mumbai", meanT: 28, seasonAmp: 5, diurnalAmp: 3.5, meanRH: 76, monsoonAmp: 20 },
+  jaipur_desert: { name: "Jaipur", meanT: 28, seasonAmp: 14, diurnalAmp: 8, meanRH: 38, monsoonAmp: 24 },
+  leh_cold: { name: "Leh", meanT: 6, seasonAmp: 17, diurnalAmp: 8.5, meanRH: 35, monsoonAmp: 10 },
+  guwahati_humid: { name: "Guwahati", meanT: 25, seasonAmp: 7, diurnalAmp: 3.5, meanRH: 78, monsoonAmp: 18 }
+};
+
+function generateClimateProfile(regionKey, days) {
+  var seed = CLIMATE_SEEDS[regionKey] || CLIMATE_SEEDS.delhi_hot;
+  var n = Math.max(24, days * 24);
+  var temps = [];
+  var rhs = [];
+  var heatStress = [];
+  var coldPlating = [];
+  var offset = num("climate-temp-offset", 0.0);
+  var chargeStress = num("climate-charge-stress", 1.0);
+  for (var h = 0; h < n; h++) {
+    var day = h / 24.0;
+    var seasonal = seed.seasonAmp * Math.sin(2 * Math.PI * (day / 365 + 0.18));
+    var diurnal = seed.diurnalAmp * Math.sin(2 * Math.PI * ((h % 24) - 14) / 24);
+    var t = seed.meanT + seasonal + diurnal + offset;
+    var monsoon = seed.monsoonAmp * Math.sin(2 * Math.PI * (day / 365 - 0.05));
+    var rh = clamp(seed.meanRH + monsoon - 0.45 * diurnal, 8, 98);
+    var hs = 1 / (1 + Math.exp(-(t - 42) / 3.5)) * (1 + 0.004 * Math.max(rh - 60, 0)) * chargeStress;
+    var cp = 1 / (1 + Math.exp((t - 2) / 3));
+    temps.push(t);
+    rhs.push(rh);
+    heatStress.push(clamp(hs, 0, 1.5));
+    coldPlating.push(clamp(cp, 0, 1));
+  }
+  return { name: seed.name, temps: temps, rhs: rhs, heatStress: heatStress, coldPlating: coldPlating, hours: n };
+}
+
+function runClimateStress() {
+  var region = document.getElementById("climate-region").value;
+  var days = parseInt(document.getElementById("climate-days").value, 10) || 14;
+  var profile = generateClimateProfile(region, days);
+  // Subsample for plotting (max 400 points)
+  var step = Math.max(1, Math.floor(profile.hours / 400));
+  var tSub = [], hsSub = [];
+  for (var i = 0; i < profile.hours; i += step) {
+    tSub.push(profile.temps[i]);
+    hsSub.push(profile.heatStress[i]);
+  }
+  var cv = makeCanvas("climate-chart");
+  if (cv) {
+    drawMultiLine(cv, [
+      { name: "Temp °C", values: tSub, color: "#ff9f1a" },
+      { name: "Heat stress", values: hsSub.map(function (v) { return v * 50; }), color: "#ff1a1a", glow: true }
+    ], { yMin: -10, yMax: 60, title: profile.name + " — " + days + " day temperature + heat stress (×50)", legend: true, yDigits: 0 });
+  }
+  var meanT = mean(profile.temps);
+  var maxT = Math.max.apply(null, profile.temps);
+  var minT = Math.min.apply(null, profile.temps);
+  var hsHours = profile.heatStress.filter(function (v) { return v > 0.1; }).length;
+  var cpHours = profile.coldPlating.filter(function (v) { return v > 0.1; }).length;
+  setReadouts("climate-readout", [
+    { k: "Mean T", v: meanT.toFixed(1) + " °C" },
+    { k: "Max T", v: maxT.toFixed(1) + " °C" },
+    { k: "Heat Stress hrs", v: String(hsHours) },
+    { k: "Cold Plating hrs", v: String(cpHours) }
+  ]);
+  showToast(profile.name + ": mean " + meanT.toFixed(1) + "°C, " + hsHours + " heat-stress hours.", "ok");
+}
+
+function runClimateCompare() {
+  var days = parseInt(document.getElementById("climate-days").value, 10) || 14;
+  var regions = Object.keys(CLIMATE_SEEDS);
+  var barData = regions.map(function (key) {
+    var p = generateClimateProfile(key, days);
+    return {
+      name: CLIMATE_SEEDS[key].name,
+      meanT: mean(p.temps),
+      maxT: Math.max.apply(null, p.temps),
+      hsHours: p.heatStress.filter(function (v) { return v > 0.1; }).length,
+      cpHours: p.coldPlating.filter(function (v) { return v > 0.1; }).length
+    };
+  });
+  var cv = makeCanvas("climate-compare-chart");
+  if (!cv) return;
+  var ctx = cv.getContext("2d");
+  var W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+  var pad = { t: 20, b: 40, l: 52, r: 10 };
+  var pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+  var n = barData.length;
+  var bw = Math.floor(pw / n * 0.7);
+  var gap = Math.floor(pw / n * 0.3);
+  var maxHs = Math.max.apply(null, barData.map(function (d) { return d.hsHours; })) || 1;
+  barData.forEach(function (d, i) {
+    var x = pad.l + i * (bw + gap) + gap / 2;
+    var barH = (d.hsHours / maxHs) * ph;
+    // Heat stress bar
+    var grad = ctx.createLinearGradient(x, pad.t + ph - barH, x, pad.t + ph);
+    grad.addColorStop(0, "#ff4444");
+    grad.addColorStop(1, "#8b0000");
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, pad.t + ph - barH, bw, barH);
+    // Cold plating small bar
+    var cpH = (d.cpHours / Math.max(maxHs, 1)) * ph;
+    ctx.fillStyle = "rgba(56,189,248,0.5)";
+    ctx.fillRect(x + bw - 6, pad.t + ph - cpH, 6, cpH);
+    // Label
+    ctx.fillStyle = "#aaa";
+    ctx.font = "9px JetBrains Mono, monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(d.name, x + bw / 2, H - 8);
+    ctx.fillText(d.hsHours + "h", x + bw / 2, pad.t + ph - barH - 5);
+    ctx.textAlign = "start";
+  });
+  ctx.fillStyle = "#777";
+  ctx.font = "10px JetBrains Mono, monospace";
+  ctx.fillText("Heat stress hours (red) + cold plating (blue) across India regions", pad.l, 14);
 }
 
 window.addEventListener("DOMContentLoaded", function () {

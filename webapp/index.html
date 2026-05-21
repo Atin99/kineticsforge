@@ -23,6 +23,7 @@
     <a href="#" onclick="navigate('bms')" id="nav-bms">BMS</a>
     <a href="#" onclick="navigate('materials')" id="nav-materials">Materials</a>
     <a href="#" onclick="navigate('recycling')" id="nav-recycling">Recycling</a>
+    <a href="#" onclick="navigate('analytics')" id="nav-analytics">Analytics</a>
     <a href="#" onclick="navigate('architecture')" id="nav-architecture">Architecture</a>
     <a href="#" onclick="navigate('platform')" id="nav-platform">Status</a>
     <a href="#" onclick="navigate('api')" id="nav-api">API</a>
@@ -598,6 +599,31 @@
           </div>
         </div>
       </div>
+
+      <div class="panel" style="margin-top:1rem">
+        <div class="panel-title"><span class="indicator"></span> Composition Quality Radar</div>
+        <div class="range-desc">Six-axis radar comparing capacity, stability, fade resistance, cost efficiency, oxygen safety, and charge balance. Larger area = better candidate.</div>
+        <div class="chart-box" style="height:260px; display:flex; align-items:center; justify-content:center">
+          <canvas id="radar-chart" width="300" height="260" style="display:block"></canvas>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:1rem">
+        <div class="panel-title"><span class="indicator"></span> Crystal Lattice Phase Stability</div>
+        <div class="range-desc">Atomic layer simulation — Jahn-Teller distortion (high Mn³⁺) or lattice collapse (low Na⁺). Doping atoms glow as stabilization pillars. Na⁺ ions pulse in the gallery.</div>
+        <div class="lattice-container">
+          <canvas id="lattice-canvas" width="500" height="220" style="width:100%; height:220px; display:block"></canvas>
+        </div>
+        <div class="readout-grid" id="lattice-readout" style="grid-template-columns: repeat(3, 1fr)"></div>
+      </div>
+
+      <div class="panel" style="margin-top:1rem">
+        <div class="panel-title"><span class="indicator"></span> Predicted Cycle Life Curve</div>
+        <div class="range-desc">Simulated capacity retention over 1000 cycles for the current composition. Shows where the knee-point accelerated degradation begins.</div>
+        <div class="chart-box" id="cycle-life-chart" style="height:200px"></div>
+        <div class="readout-grid" id="cycle-life-readout" style="grid-template-columns: repeat(4, 1fr)"></div>
+      </div>
+
       <div class="decision-box" id="mat-decision">Screen a composition to see whether it is worth synthesizing or just worth simulating.</div>
       <div id="mat-confidence"></div>
     </div>
@@ -695,6 +721,87 @@
       </div>
       <div class="decision-box" id="recycle-decision">Run the recipe to get recovery, uncertainty interval, and whether the batch is economical.</div>
       <div id="recycle-confidence"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── ANALYTICS (Ragone + Range + Climate + Electrolyte) ── -->
+<section class="section" id="sec-analytics">
+  <div class="section-header">
+    <h2>Analytics Suite</h2>
+    <p>Ragone plot, vehicle range estimator, electrolyte recommendation, and India regional climate stress — all API-backed.</p>
+  </div>
+
+  <div class="grid-2">
+    <div>
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title"><span class="indicator"></span> Ragone Plot (Energy vs Power)</div>
+        <div class="range-desc">Interactive energy-power density trade-off for the current composition and C-rate sweep. Points are computed from the physics model.</div>
+        <div class="knob-grid" style="margin-bottom:0.75rem">
+          <label>Max C-Rate Sweep <input class="mini-input" id="ragone-max-cr" type="number" value="5.0" min="1.0" max="10.0" step="0.5"></label>
+          <label>Cell Mass (g) <input class="mini-input" id="ragone-cell-mass" type="number" value="120" min="10" max="1000" step="10"></label>
+        </div>
+        <div class="chart-box" id="ragone-chart" style="height:280px"></div>
+        <div class="readout-grid" id="ragone-readout"></div>
+        <div style="margin-top:0.75rem">
+          <button class="btn btn-primary" onclick="runRagone()" type="button">Compute Ragone</button>
+          <button class="btn btn-ghost" onclick="exportRagoneCSV()" type="button" style="margin-left:0.5rem">Download CSV</button>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title"><span class="indicator"></span> Electrolyte Recommendation</div>
+        <div class="range-desc">Rule-based electrolyte and additive recommendation for the current cathode composition. Grounded in published Na-ion compatibility data.</div>
+        <div id="electrolyte-result" style="padding:0.5rem">
+          <div class="plot-note">Run Materials screening or click below to get an electrolyte recommendation.</div>
+        </div>
+        <button class="btn btn-ghost" onclick="runElectrolyteRecommend()" type="button" style="margin-top:0.5rem">Recommend Electrolyte</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel" style="margin-bottom:1rem">
+        <div class="panel-title"><span class="indicator"></span> Vehicle Range Estimator</div>
+        <div class="range-desc">Estimate driving range from current SOH, energy density, and vehicle efficiency (WLTP baseline).</div>
+        <div class="knob-grid" style="margin-bottom:0.75rem">
+          <label>SOH <input class="mini-input" id="range-soh" type="number" value="1.0" min="0.5" max="1.0" step="0.01"></label>
+          <label>Energy Wh/kg <input class="mini-input" id="range-energy" type="number" value="250" min="50" max="600" step="10"></label>
+          <label>Pack kg <input class="mini-input" id="range-pack-kg" type="number" value="495" min="5" max="2000" step="5"></label>
+          <label>Eff kWh/100km <input class="mini-input" id="range-eff" type="number" value="15" min="5" max="40" step="1"></label>
+          <label>Target Range (km) <input class="mini-input" id="range-target" type="number" value="600" min="50" max="1500" step="10"></label>
+          <label>Motor Power (kW) <input class="mini-input" id="range-motor-kw" type="number" value="150" min="10" max="1000" step="10"></label>
+        </div>
+        <div class="chart-box" id="range-chart" style="height:200px"></div>
+        <div class="readout-grid" id="range-readout"></div>
+        <button class="btn btn-primary" onclick="runRangeEstimate()" type="button" style="margin-top:0.75rem">Estimate Range</button>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title"><span class="indicator"></span> Regional Climate Stress (India)</div>
+        <div class="range-desc">Compare degradation severity across 6 Indian climate zones using the regional climate engine.</div>
+        <div class="knob-grid" style="margin-bottom:0.75rem">
+          <label>Region
+            <select class="mini-input" id="climate-region" style="width:140px">
+              <option value="delhi_hot">Delhi (Hot)</option>
+              <option value="chennai_coastal">Chennai (Coastal)</option>
+              <option value="mumbai_monsoon">Mumbai (Monsoon)</option>
+              <option value="jaipur_desert">Jaipur (Desert)</option>
+              <option value="leh_cold">Leh (Cold)</option>
+              <option value="guwahati_humid">Guwahati (Humid)</option>
+            </select>
+          </label>
+          <label>Days <input class="mini-input" id="climate-days" type="number" value="14" min="7" max="365" step="7"></label>
+          <label>Temp Offset (°C) <input class="mini-input" id="climate-temp-offset" type="number" value="0.0" min="-15" max="15" step="0.5"></label>
+          <label>Fast Charge Stress <input class="mini-input" id="climate-charge-stress" type="number" value="1.0" min="1.0" max="3.0" step="0.1"></label>
+        </div>
+        <div class="chart-box" id="climate-chart" style="height:220px"></div>
+        <div class="readout-grid" id="climate-readout"></div>
+        <div class="chart-box" id="climate-compare-chart" style="height:180px;margin-top:0.75rem"></div>
+        <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="runClimateStress()" type="button">Run Climate Profile</button>
+          <button class="btn btn-ghost" onclick="runClimateCompare()" type="button">Compare All Regions</button>
+        </div>
+      </div>
     </div>
   </div>
 </section>
@@ -879,9 +986,10 @@
       <div class="assistant-msg bot">Ask about a highlighted cell, a plot, an equation, or what to change next.</div>
       <div class="assistant-prompts">
         <button type="button" data-q="How do I use this app?">Use app</button>
-        <button type="button" data-q="What is the mechanism state map?">Mechanism map</button>
-        <button type="button" data-q="What does the highlighted cell mean?">Cell highlight</button>
-        <button type="button" data-q="What should I do next from the Decision Console?">Next action</button>
+        <button type="button" data-q="Explain the lattice phase stability and dopant effects">Lattice stability</button>
+        <button type="button" data-q="What does the radar chart show about my composition?">Radar chart</button>
+        <button type="button" data-q="Run a Ragone analysis for my current cathode">Ragone analysis</button>
+        <button type="button" data-q="Compare climate stress across Indian cities">Climate stress</button>
         <button type="button" data-q="What should I validate before making strong claims?">Validation</button>
       </div>
     </div>
@@ -889,7 +997,7 @@
       <input id="assistant-input" type="text" maxlength="1200" autocomplete="off" placeholder="Ask KineticsForge..." aria-label="Ask KineticsForge">
       <button type="submit">Send</button>
     </form>
-    <div class="assistant-foot" id="assistant-foot">Cloud assistant uses server-side OpenRouter. Memory off.</div>
+    <div class="assistant-foot" id="assistant-foot"><span id="assistant-source-badge"></span> Cloud · <span id="assistant-model-label">OpenRouter</span> · <span id="assistant-memory-label">memory off</span></div>
   </div>
 </div>
 

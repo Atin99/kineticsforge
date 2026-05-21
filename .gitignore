@@ -1,28 +1,53 @@
+# ── Secrets ──────────────────────────────────────
+.env
+*.env.local
+*.env.*.local
+
+# ── Python ───────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
+dist/
+build/
 _pydeps/
-.playwright-cli/
-.env
-*.zip
+.pytest_cache/
+
+# ── Model weights & data (too large for git) ────
 *.pt
 *.pth
+*.onnx
+*.npz
+*.zip
+*.tar.gz
+*.h5
 data/real/
 data/cache/
 data/synthetic/*.csv
 checkpoints/trained/
 checkpoints/smoke/
-kaggle_deploy/*_zip/
-kaggle_deploy/kineticsforge-realdata-*/
-kaggle_deploy/phase2_data/
-kaggle_deploy/phase2_data_v2/
-*.egg-info/
-dist/
-build/
 artifacts/
+
+# ── Kaggle training notebooks (not needed for deploy)
+kaggle_deploy/
+kaggle_deploy_2/
+kaggle_deploy_3/
+
+# ── Training & research (not needed for deploy) ─
+training/
+validation/
+reports/
+business/
+dashboard/
+docs/
+
+# ── OS junk ──────────────────────────────────────
 .DS_Store
 Thumbs.db
-*.npz
-kaggle_deploy_2/*_zip/
-kaggle_deploy_3/acct_zip/
-.pytest_cache/
+desktop.ini
+
+# ── IDE ──────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo

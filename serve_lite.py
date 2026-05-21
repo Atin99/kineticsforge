@@ -5,6 +5,7 @@ opportunistically runs trained PyTorch checkpoints when torch is installed.
 
 Run: python serve.py
 """
+from __future__ import annotations
 import os
 import sys
 import time
@@ -43,7 +44,8 @@ def load_env_file(path: Path) -> None:
 load_env_file(ROOT / ".env")
 
 try:
-    from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+    import asyncio
+    from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket
     from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
     from fastapi.staticfiles import StaticFiles
     from fastapi.middleware.cors import CORSMiddleware
@@ -69,6 +71,102 @@ try:
 except Exception as exc:  # pragma: no cover - keeps the production server bootable
     logger.warning("BYOD analyzer unavailable: %s", exc)
     analyze_upload = None
+
+
+class DegradationRequest(BaseModel):
+    temperature_C: float = 45.0
+    c_rate: float = 1.0
+    cycles: int = 500
+    enable_p2o2: bool = True
+    enable_jt: bool = True
+    enable_sei: bool = True
+    enable_neural: bool = True
+    sei_k_scale: float = 1.0
+    sei_ea_ev: float = 0.56
+    p2_rate: float = 0.0028
+    p2_soc_crit: float = 0.78
+    jt_scale: float = 1.0
+    bv_scale: float = 1.0
+    stress_exponent: float = 0.55
+    residual_scale: float = 1.0
+    na: float = 1.02
+    mn: float = 0.52
+    fe: float = 0.43
+    dopant_frac: float = 0.05
+
+
+class BMSRequest(BaseModel):
+    n_cells: int = 8
+    duration_seconds: int = 120
+    inject_fault: bool = True
+    enable_eis: bool = True
+    asymmetric_alert: bool = True
+    cth_j_per_k: float = 95.0
+    edge_k: float = 0.18
+    cooling_h: float = 0.045
+    load_scale: float = 1.0
+    rct_gate: float = 0.043
+    risk_threshold: float = 0.42
+    ambient_C: float = 45.0
+    seed: Optional[int] = 42
+
+
+class RecyclingRequest(BaseModel):
+    mass_kg: float = 100.0
+    acid_molarity: float = 2.0
+    temperature_C: float = 80.0
+    monte_carlo: bool = True
+    bayesian_update: bool = True
+    leach_time_min: float = 120.0
+    particle_um: float = 50.0
+    acid_order: float = 0.95
+    mn_ea_j_mol: float = 27000.0
+
+
+class ScreenRequest(BaseModel):
+    na: float = 1.0
+    mn: float = 0.5
+    fe: float = 0.5
+    al_doped: bool = False
+    ti_doped: bool = False
+    upper_voltage: float = 4.10
+    ehull_slope: float = 20.0
+    w_capacity: float = 0.32
+    w_stability: float = 0.32
+    w_fade: float = 0.22
+    w_cost: float = 0.14
+
+
+class ChatRequest(BaseModel):
+    question: str = Field(..., min_length=2, max_length=1200)
+    section: str = "general"
+    state: Optional[Dict[str, Any]] = None
+
+
+class CathodeBatchRequest(BaseModel):
+    n: int = 100
+    temperature_K: float = 318.15
+
+
+class CyclerWebhookRequest(BaseModel):
+    station_id: Optional[str] = None
+    channel_id: Optional[str] = None
+    cell_id: Optional[str] = None
+    cycle: Optional[int] = None
+    nominal_capacity_ah: Optional[float] = None
+    discharge_capacity_ah: Optional[float] = None
+    charge_capacity_ah: Optional[float] = None
+    soh: Optional[float] = None
+    coulombic_efficiency: Optional[float] = None
+    voltage_V: Optional[List[float]] = None
+    current_A: Optional[List[float]] = None
+    temperature_C: Optional[List[float]] = None
+    stop_soh: float = 0.80
+    warn_soh: float = 0.85
+    max_temperature_C: float = 60.0
+    min_voltage_V: float = 1.5
+    max_voltage_V: float = 4.5
+
 
 PRODUCTION = os.environ.get("KF_ENV", "").lower() == "production" or os.environ.get("RENDER", "").lower() == "true"
 app = FastAPI(
@@ -667,100 +765,226 @@ def _prune_sessions() -> None:
     for sid in expired:
         _byod_sessions.pop(sid, None)
 
+# -----------------------------------------------------------------------------
+# Confidence computation helpers
+# -----------------------------------------------------------------------------
 
-class DegradationRequest(BaseModel):
-    temperature_C: float = 45.0
-    c_rate: float = 1.0
-    cycles: int = 500
-    enable_p2o2: bool = True
-    enable_jt: bool = True
-    enable_sei: bool = True
-    enable_neural: bool = True
-    sei_k_scale: float = 1.0
-    sei_ea_ev: float = 0.56
-    p2_rate: float = 0.0028
-    p2_soc_crit: float = 0.78
-    jt_scale: float = 1.0
-    bv_scale: float = 1.0
-    stress_exponent: float = 0.55
-    residual_scale: float = 1.0
-    na: float = 1.02
-    mn: float = 0.52
-    fe: float = 0.43
-    dopant_frac: float = 0.05
+def _bms_confidence(result: Dict[str, Any]) -> tuple[float, str]:
+    """Return a confidence score (0‑1) and a human‑readable rationale for a BMS run.
+
+    Heuristics used:
+    * Seed provided → deterministic → +0.2
+    * Lower max risk → higher confidence (risk in [0, 1])
+    * Fewer alerts → +0.1 per alert up to a max of 5 alerts
+    * Distance between risk_threshold and max_risk (margin) → bonus
+    """
+    score = 0.5
+    reasons = []
+    if result.get("seed") is not None:
+        score += 0.2
+        reasons.append("deterministic seed present")
+    max_risk = result.get("max_risk", 0.0)
+    risk_score = max(0.0, 1.0 - max_risk)
+    score += 0.4 * risk_score
+    reasons.append(f"max risk {max_risk:.2f} gives {risk_score:.2f} contribution")
+    alerts = result.get("alerts", [])
+    alert_bonus = min(len(alerts) * 0.02, 0.1)
+    score += alert_bonus
+    reasons.append(f"{len(alerts)} alerts give +{alert_bonus:.2f}")
+    threshold = result.get("risk_threshold", 0.42)
+    if max_risk < threshold:
+        margin = (threshold - max_risk) / threshold
+        margin_bonus = 0.1 * margin
+        score += margin_bonus
+        reasons.append(f"margin to threshold {margin:.2f} adds +{margin_bonus:.2f}")
+    score = max(0.0, min(1.0, score))
+    return score, ", ".join(reasons)
+
+def _materials_confidence(summary: Dict[str, Any]) -> tuple[float, str]:
+    """Confidence for Materials screening.
+    Uses schema_score, feature coverage, and model confidence if present.
+    """
+    score = 0.4
+    reasons = []
+    schema = summary.get("schema_score", 0.0)
+    score += 0.3 * schema
+    reasons.append(f"schema score {schema:.2f} (+{0.3 * schema:.2f})")
+    rows_read = summary.get("rows_read", 1)
+    features_present = summary.get("features_present", 0)
+    feature_cov = features_present / max(1, rows_read)
+    score += 0.2 * feature_cov
+    reasons.append(f"feature coverage {feature_cov:.2f} (+{0.2 * feature_cov:.2f})")
+    model_conf = summary.get("confidence", 0.0)
+    score += 0.1 * model_conf
+    reasons.append(f"model confidence {model_conf:.2f} (+{0.1 * model_conf:.2f})")
+    score = max(0.0, min(1.0, score))
+    return score, ", ".join(reasons)
+
+def _recycling_confidence(result: Dict[str, Any]) -> tuple[float, str]:
+    """Confidence for recycling MC simulation.
+    Uses Monte‑Carlo sample size, variance of recovery, and bayesian_update flag.
+    """
+    score = 0.4
+    reasons = []
+    samples = result.get("monte_carlo_samples", RECYCLING_MC_SAMPLES)
+    sample_score = min(samples / 500.0, 1.0)
+    score += 0.2 * sample_score
+    reasons.append(f"{samples} MC samples (+{0.2 * sample_score:.2f})")
+    var = result.get("recovery_std", 0.0)
+    if var:
+        var_score = max(0.0, 1.0 - var)
+        score += 0.2 * var_score
+        reasons.append(f"recovery std {var:.2f} (+{0.2 * var_score:.2f})")
+    if result.get("bayesian_update"):
+        score += 0.1
+        reasons.append("bayesian update enabled (+0.1)")
+    score = max(0.0, min(1.0, score))
+    return score, ", ".join(reasons)
+
+def _upload_confidence(summary: Dict[str, Any]) -> tuple[float, str]:
+    """Confidence for BYOD upload processing.
+    Considers parser warnings, feature mask completeness, and model inference status.
+    """
+    score = 0.5
+    reasons = []
+    warnings = len(summary.get("warnings", []))
+    warn_penalty = min(warnings * 0.05, 0.2)
+    score -= warn_penalty
+    reasons.append(f"{warnings} warnings (−{warn_penalty:.2f})")
+    present = summary.get("features_present", 0)
+    rows = summary.get("rows_read", 1)
+    completeness = present / max(1, rows)
+    score += 0.3 * completeness
+    reasons.append(f"feature completeness {completeness:.2f} (+{0.3 * completeness:.2f})")
+    inference = summary.get("inference_mode", "rules_only")
+    if inference == "checkpoint_plus_rules":
+        score += 0.1
+        reasons.append("checkpoint inference available (+0.1)")
+    score = max(0.0, min(1.0, score))
+    return score, ", ".join(reasons)
+
+# -----------------------------------------------------------------------------
+# New API routes
+# -----------------------------------------------------------------------------
+
+@app.get("/api/confidence/{session_id}")
+async def get_confidence(session_id: str):
+    session = _byod_sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    result = session.get("result", {})
+    bms_conf, bms_reason = _bms_confidence(result) if result.get("max_risk") is not None else (None, None)
+    mat_conf, mat_reason = _materials_confidence(result) if result.get("score") is not None else (None, None)
+    rec_conf, rec_reason = _recycling_confidence(result) if result.get("total_recovered_kg") is not None else (None, None)
+    upl_conf, upl_reason = _upload_confidence(result) if result.get("schema_score") is not None else (None, None)
+    return {
+        "bms": {"confidence": bms_conf, "reason": bms_reason},
+        "materials": {"confidence": mat_conf, "reason": mat_reason},
+        "recycling": {"confidence": rec_conf, "reason": rec_reason},
+        "upload": {"confidence": upl_conf, "reason": upl_reason},
+    }
+
+# Simple electrolyte recommendation (rule‑based)
+@app.post("/api/electrolyte_recommend")
+async def electrolyte_recommend(comp: ScreenRequest):
+    if comp.na >= 1.0 and comp.mn >= 0.5:
+        electrolyte = "carbonate (EC/EMC) with 1.0 M NaPF6"
+        additives = ["FEC", "VC"]
+    else:
+        electrolyte = "ether‑based (DME) with 1.2 M NaTFSI"
+        additives = ["fluoroethylene carbonate"]
+    return {"electrolyte": electrolyte, "additives": additives}
+
+# Rag‑one prediction (simple analytic proxy)
+@app.get("/api/ragone")
+async def ragone(na: float = 1.0, mn: float = 0.5, fe: float = 0.5, c_rate: float = 1.0):
+    energy = 250 * (na + 0.5 * mn + 0.3 * fe)
+    power = 500 / (1 + 0.5 * c_rate)
+    return {"energy_wh_kg": round(energy, 1), "power_w_kg": round(power, 1)}
+
+# Range estimator – uses WLTP profile as example
+@app.get("/api/range_estimate")
+async def range_estimate(soh: float = 1.0, energy_wh_kg: float = 250.0, vehicle_efficiency_kwh_per_100km: float = 0.15):
+    usable_kwh = soh * energy_wh_kg * 0.2
+    range_km = usable_kwh / vehicle_efficiency_kwh_per_100km * 100
+    return {"estimated_range_km": round(range_km, 1)}
+
+# WebSocket for live BMS streaming (demo – sends stored result after short pause)
+@app.websocket("/ws/bms/{session_id}")
+async def bms_ws(websocket: WebSocket, session_id: str):
+    await websocket.accept()
+    await asyncio.sleep(0.5)
+    session = _byod_sessions.get(session_id)
+    if session:
+        await websocket.send_json({"type": "bms_result", "payload": session.get("result", {})})
+    await websocket.close()
 
 
-class BMSRequest(BaseModel):
-    n_cells: int = 8
-    duration_seconds: int = 120
-    inject_fault: bool = True
-    enable_eis: bool = True
-    asymmetric_alert: bool = True
-    cth_j_per_k: float = 95.0
-    edge_k: float = 0.18
-    cooling_h: float = 0.045
-    load_scale: float = 1.0
-    rct_gate: float = 0.043
-    risk_threshold: float = 0.42
-    ambient_C: float = 45.0
-    seed: Optional[int] = 42
+# Climate stress profile API
+@app.get("/api/climate/{region}")
+async def climate_profile(region: str = "delhi_hot", days: int = 14):
+    try:
+        from core.regional_climate import RegionalClimateEngine, REGIONS
+        from dataclasses import asdict
+        if region not in REGIONS:
+            raise HTTPException(status_code=400, detail=f"Unknown region '{region}'. Available: {list(REGIONS.keys())}")
+        engine = RegionalClimateEngine()
+        profile = engine.profile(region, days=days)
+        data = asdict(profile)
+        # Add computed summary
+        temps = np.array(data["temperature_C"])
+        hs = np.array(data["heat_stress_index"])
+        cp = np.array(data["cold_plating_index"])
+        data["summary"] = {
+            "mean_T_C": round(float(np.mean(temps)), 2),
+            "max_T_C": round(float(np.max(temps)), 2),
+            "min_T_C": round(float(np.min(temps)), 2),
+            "heat_stress_hours": int(np.sum(hs > 0.1)),
+            "cold_plating_hours": int(np.sum(cp > 0.1)),
+        }
+        return data
+    except ImportError:
+        raise HTTPException(status_code=503, detail="regional_climate module not available")
 
 
-class RecyclingRequest(BaseModel):
-    mass_kg: float = 100.0
-    acid_molarity: float = 2.0
-    temperature_C: float = 80.0
-    monte_carlo: bool = True
-    bayesian_update: bool = True
-    leach_time_min: float = 120.0
-    particle_um: float = 50.0
-    acid_order: float = 0.95
-    mn_ea_j_mol: float = 27000.0
+# Compare all regions
+@app.get("/api/climate/compare")
+async def climate_compare(days: int = 14):
+    try:
+        from core.regional_climate import RegionalClimateEngine, REGIONS
+        from dataclasses import asdict
+        engine = RegionalClimateEngine()
+        res = {}
+        for name in REGIONS:
+            p = engine.profile(name, days=days)
+            data = asdict(p)
+            temps = np.array(data["temperature_C"])
+            hs = np.array(data["heat_stress_index"])
+            cp = np.array(data["cold_plating_index"])
+            res[name] = {
+                "name": name,
+                "mean_T_C": round(float(np.mean(temps)), 2),
+                "max_T_C": round(float(np.max(temps)), 2),
+                "min_T_C": round(float(np.min(temps)), 2),
+                "heat_stress_hours": int(np.sum(hs > 0.1)),
+                "cold_plating_hours": int(np.sum(cp > 0.1)),
+            }
+        return res
+    except ImportError:
+        raise HTTPException(status_code=503, detail="regional_climate module not available")
 
 
-class ScreenRequest(BaseModel):
-    na: float = 1.0
-    mn: float = 0.5
-    fe: float = 0.5
-    al_doped: bool = False
-    ti_doped: bool = False
-    upper_voltage: float = 4.10
-    ehull_slope: float = 20.0
-    w_capacity: float = 0.32
-    w_stability: float = 0.32
-    w_fade: float = 0.22
-    w_cost: float = 0.14
-
-
-class ChatRequest(BaseModel):
-    question: str = Field(..., min_length=2, max_length=1200)
-    section: str = "general"
-    state: Optional[Dict[str, Any]] = None
-
-
-class CathodeBatchRequest(BaseModel):
-    n: int = 100
-    temperature_K: float = 318.15
-
-
-class CyclerWebhookRequest(BaseModel):
-    station_id: Optional[str] = None
-    channel_id: Optional[str] = None
-    cell_id: Optional[str] = None
-    cycle: Optional[int] = None
-    nominal_capacity_ah: Optional[float] = None
-    discharge_capacity_ah: Optional[float] = None
-    charge_capacity_ah: Optional[float] = None
-    soh: Optional[float] = None
-    coulombic_efficiency: Optional[float] = None
-    voltage_V: Optional[List[float]] = None
-    current_A: Optional[List[float]] = None
-    temperature_C: Optional[List[float]] = None
-    stop_soh: float = 0.80
-    warn_soh: float = 0.85
-    max_temperature_C: float = 60.0
-    min_voltage_V: float = 1.5
-    max_voltage_V: float = 4.5
+# Scenario planner API
+@app.post("/api/scenario/bms")
+async def scenario_bms(scenarios: List[Dict[str, Any]]):
+    try:
+        from core.scenario_planner import run_scenarios
+        if len(scenarios) > 50:
+            raise HTTPException(status_code=400, detail="Maximum 50 scenarios per request")
+        results = run_scenarios(scenarios)
+        return {"count": len(results), "results": results}
+    except ImportError:
+        raise HTTPException(status_code=503, detail="scenario_planner module not available")
 
 
 def clamp(x: float, lo: float, hi: float) -> float:
