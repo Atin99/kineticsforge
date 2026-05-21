@@ -874,20 +874,20 @@
         <tr><th>Model</th><th>Type</th><th>Status</th><th>Checkpoint</th><th>Params</th></tr>
       </thead>
       <tbody>
-        <tr><td style="font-weight:600">M1_CathodeUDE</td><td>UDE physics plus residual</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">45909</td></tr>
-        <tr><td style="font-weight:600">M2_SOH</td><td>MLP regression</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">32737</td></tr>
-        <tr><td style="font-weight:600">M3_CycleLife</td><td>Classifier</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">37156</td></tr>
-        <tr><td style="font-weight:600">M4_FadeRate</td><td>MLP regression</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">7329</td></tr>
-        <tr><td style="font-weight:600">M5_BMS_TGN</td><td>Thermal graph risk</td><td><span class="tag warn">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">11020</td></tr>
-        <tr><td style="font-weight:600">M6_RUL</td><td>MLP regression</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">34753</td></tr>
-        <tr><td style="font-weight:600">M7_Anomaly</td><td>Autoencoder</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">31551</td></tr>
-        <tr><td style="font-weight:600">M8_Joint_SOH_RUL</td><td>Multi-task MLP</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">141907</td></tr>
-        <tr><td style="font-weight:600">M9_KneeDetect</td><td>Conv1D detector</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">219233</td></tr>
-        <tr><td style="font-weight:600">M10_ChemRank</td><td>Embedding ranker</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">7809</td></tr>
-        <tr><td style="font-weight:600">M11_ElectrolyteHealth</td><td>EIS diagnostics</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">8819</td></tr>
-        <tr><td style="font-weight:600">M12_Replenishability</td><td>Recovery preview</td><td><span class="tag warn">Preview</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">9554</td></tr>
-        <tr><td style="font-weight:600">M13_ChemIdentifier</td><td>Early-cycle classifier</td><td><span class="tag sim">Simulation</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">80552</td></tr>
-        <tr><td style="font-weight:600">M14_FormationProtocol</td><td>Formation quality</td><td><span class="tag warn">Preview</span></td><td>not found</td><td style="font-family:JetBrains Mono;font-size:11px">19747</td></tr>
+        <tr><td style="font-weight:600">M1_CathodeUDE</td><td>UDE physics plus residual</td><td><span class="tag ok">ML Surrogate</span></td><td>cathode_ude_best.pt</td><td style="font-family:JetBrains Mono;font-size:11px">45909</td></tr>
+        <tr><td style="font-weight:600">M2_SOH</td><td>MLP regression</td><td><span class="tag ok">ML Surrogate</span></td><td>soh_best.pt</td><td style="font-family:JetBrains Mono;font-size:11px">32737</td></tr>
+        <tr><td style="font-weight:600">M3_CycleLife</td><td>Classifier</td><td><span class="tag ok">ML Surrogate</span></td><td>cycle_life_best.pt</td><td style="font-family:JetBrains Mono;font-size:11px">37156</td></tr>
+        <tr><td style="font-weight:600">M4_FadeRate</td><td>MLP regression</td><td><span class="tag ok">ML Surrogate</span></td><td>fade_rate_best.pt</td><td style="font-family:JetBrains Mono;font-size:11px">7329</td></tr>
+        <tr><td style="font-weight:600">M5_BMS_TGN</td><td>Thermal graph risk</td><td><span class="tag warn">Label Gate</span></td><td>bms_tgn_best.pt</td><td style="font-family:JetBrains Mono;font-size:11px">11020</td></tr>
+        <tr><td style="font-weight:600">M6_RUL</td><td>MLP regression</td><td><span class="tag ok">ML Surrogate</span></td><td>rul_best.pt</td><td style="font-family:JetBrains Mono;font-size:11px">34753</td></tr>
+        <tr><td style="font-weight:600">M7_Anomaly</td><td>Autoencoder</td><td><span class="tag ok">ML Surrogate</span></td><td>anomaly_ae_best.pt</td><td style="font-family:JetBrains Mono;font-size:11px">31551</td></tr>
+        <tr><td style="font-weight:600">M8_Joint_SOH_RUL</td><td>Multi-task MLP</td><td><span class="tag ok">ML Surrogate</span></td><td>joint_soh_rul_best.pt</td><td style="font-family:JetBrains Mono;font-size:11px">141907</td></tr>
+        <tr><td style="font-weight:600">M9_KneeDetect</td><td>Conv1D detector</td><td><span class="tag ok">ML Surrogate</span></td><td>knee_detect_best.pt</td><td style="font-family:JetBrains Mono;font-size:11px">219233</td></tr>
+        <tr><td style="font-weight:600">M10_ChemRank</td><td>Embedding ranker</td><td><span class="tag ok">ML Surrogate</span></td><td>chem_rank_best.pt</td><td style="font-family:JetBrains Mono;font-size:11px">7809</td></tr>
+        <tr><td style="font-weight:600">M11_ElectrolyteHealth</td><td>EIS diagnostics</td><td><span class="tag ok">ML Surrogate</span></td><td>electrolyte_health_best.pt</td><td style="font-family:JetBrains Mono;font-size:11px">8819</td></tr>
+        <tr><td style="font-weight:600">M12_Replenishability</td><td>Recovery preview</td><td><span class="tag warn">Preview</span></td><td>replenishability_best.pt</td><td style="font-family:JetBrains Mono;font-size:11px">9554</td></tr>
+        <tr><td style="font-weight:600">M13_ChemIdentifier</td><td>Early-cycle classifier</td><td><span class="tag ok">ML Surrogate</span></td><td>chem_identifier_best.pt</td><td style="font-family:JetBrains Mono;font-size:11px">80552</td></tr>
+        <tr><td style="font-weight:600">M14_FormationProtocol</td><td>Formation quality</td><td><span class="tag warn">Preview</span></td><td>formation_protocol_best.pt</td><td style="font-family:JetBrains Mono;font-size:11px">19747</td></tr>
       </tbody>
     </table>
   </div>
@@ -909,7 +909,7 @@
     <table class="tbl">
       <thead><tr><th>Source Zip</th><th>Artifacts Imported</th><th>Manifest</th></tr></thead>
       <tbody id="checkpoint-provenance-body">
-        <tr><td>Static fallback</td><td>14 model cards visible immediately</td><td>Runtime scan updates this table when /api/models responds.</td></tr>
+        <tr><td>physics_distilled_surrogates_v1.zip</td><td>14</td><td>Bundled checkpoint manifest; runtime scan refreshes hashes from /api/models.</td></tr>
       </tbody>
     </table>
     <div class="plot-note" style="margin-top:0.6rem">If checkpoints are missing, each model follows its hardpoint fallback path (physics/rules/preview) with explicit confidence limits.</div>

@@ -306,19 +306,19 @@ _ensure_checkpoint_bundle()
 
 
 MODEL_REGISTRY = [
-    {"id": "M1_CathodeUDE", "name": "Cathode UDE", "type": "UDE physics plus residual", "status": "trained_checkpoint", "params": 45909, "checkpoint": "cathode_ude"},
-    {"id": "M2_SOH", "name": "SOH Estimator", "type": "MLP regression", "status": "trained_checkpoint", "params": 32737, "checkpoint": "soh"},
-    {"id": "M3_CycleLife", "name": "Cycle Life", "type": "Classifier", "status": "trained_checkpoint", "params": 37156, "checkpoint": "cycle_life"},
-    {"id": "M4_FadeRate", "name": "Fade Rate", "type": "MLP regression", "status": "trained_checkpoint", "params": 7329, "checkpoint": "fade_rate"},
+    {"id": "M1_CathodeUDE", "name": "Cathode UDE", "type": "UDE physics plus residual", "status": "ml_surrogate", "params": 45909, "checkpoint": "cathode_ude"},
+    {"id": "M2_SOH", "name": "SOH Estimator", "type": "MLP regression", "status": "ml_surrogate", "params": 32737, "checkpoint": "soh"},
+    {"id": "M3_CycleLife", "name": "Cycle Life", "type": "Classifier", "status": "ml_surrogate", "params": 37156, "checkpoint": "cycle_life"},
+    {"id": "M4_FadeRate", "name": "Fade Rate", "type": "MLP regression", "status": "ml_surrogate", "params": 7329, "checkpoint": "fade_rate"},
     {"id": "M5_BMS_TGN", "name": "BMS Pack Graph", "type": "Thermal graph risk", "status": "label_gate", "params": 11020, "checkpoint": "bms_tgn"},
-    {"id": "M6_RUL", "name": "RUL Predictor", "type": "MLP regression", "status": "trained_checkpoint", "params": 34753, "checkpoint": "rul"},
-    {"id": "M7_Anomaly", "name": "Anomaly AE", "type": "Autoencoder", "status": "trained_checkpoint", "params": 31551, "checkpoint": "anomaly_ae"},
-    {"id": "M8_Joint_SOH_RUL", "name": "Joint SOH+RUL", "type": "Multi-task MLP", "status": "trained_checkpoint", "params": 141907, "checkpoint": "joint_soh_rul"},
-    {"id": "M9_KneeDetect", "name": "Knee Detector", "type": "Conv1D detector", "status": "trained_checkpoint", "params": 219233, "checkpoint": "knee_detect"},
-    {"id": "M10_ChemRank", "name": "Chem Ranker", "type": "Embedding ranker", "status": "trained_checkpoint", "params": 7809, "checkpoint": "chem_rank"},
-    {"id": "M11_ElectrolyteHealth", "name": "Electrolyte Health", "type": "EIS diagnostics", "status": "trained_checkpoint", "params": 8819, "checkpoint": "electrolyte_health"},
+    {"id": "M6_RUL", "name": "RUL Predictor", "type": "MLP regression", "status": "ml_surrogate", "params": 34753, "checkpoint": "rul"},
+    {"id": "M7_Anomaly", "name": "Anomaly AE", "type": "Autoencoder", "status": "ml_surrogate", "params": 31551, "checkpoint": "anomaly_ae"},
+    {"id": "M8_Joint_SOH_RUL", "name": "Joint SOH+RUL", "type": "Multi-task MLP", "status": "ml_surrogate", "params": 141907, "checkpoint": "joint_soh_rul"},
+    {"id": "M9_KneeDetect", "name": "Knee Detector", "type": "Conv1D detector", "status": "ml_surrogate", "params": 219233, "checkpoint": "knee_detect"},
+    {"id": "M10_ChemRank", "name": "Chem Ranker", "type": "Embedding ranker", "status": "ml_surrogate", "params": 7809, "checkpoint": "chem_rank"},
+    {"id": "M11_ElectrolyteHealth", "name": "Electrolyte Health", "type": "EIS diagnostics", "status": "ml_surrogate", "params": 8819, "checkpoint": "electrolyte_health"},
     {"id": "M12_Replenishability", "name": "Replenishability", "type": "Recovery preview", "status": "research_preview", "params": 9554, "checkpoint": "replenishability"},
-    {"id": "M13_ChemIdentifier", "name": "Chem Identifier", "type": "Early-cycle classifier", "status": "trained_checkpoint", "params": 80552, "checkpoint": "chem_identifier"},
+    {"id": "M13_ChemIdentifier", "name": "Chem Identifier", "type": "Early-cycle classifier", "status": "ml_surrogate", "params": 80552, "checkpoint": "chem_identifier"},
     {"id": "M14_FormationProtocol", "name": "Formation Protocol", "type": "Formation quality", "status": "research_preview", "params": 19747, "checkpoint": "formation_protocol"},
 ]
 
@@ -433,14 +433,17 @@ def _model_registry_payload() -> List[Dict[str, Any]]:
         ckpt = _checkpoint_path(item["checkpoint"])
         row = dict(item)
         row["checkpoint_present"] = ckpt is not None
-        row["checkpoint_file"] = str(ckpt.relative_to(ROOT)) if ckpt else None
+        row["checkpoint_file"] = ckpt.relative_to(ROOT).as_posix() if ckpt else None
         row["runtime"] = "production_cpu_checkpoint_optional"
         row["params_basis"] = "architecture parameter count; not a fabricated marketing estimate"
+        row["training_basis"] = "physics/rule-distilled surrogate when checkpoint_present=true"
+        row["without_checkpoint"] = "fallback to browser/API physics mirror and explicit rules"
         if ckpt:
             meta = provenance.get(ckpt.name)
             row["checkpoint_sha256"] = meta.get("sha256") if meta else None
             row["checkpoint_source_zip"] = meta.get("source_name") if meta else None
             row["checkpoint_source_member"] = meta.get("source_member") if meta else None
+            row["training_basis"] = meta.get("training_basis") if meta else row["training_basis"]
         out.append(row)
     return out
 
@@ -1404,18 +1407,34 @@ def api_models():
         "models": _model_registry_payload(),
         "total": len(MODEL_REGISTRY),
         "checkpoint_manifest": {
-            "path": str(CHECKPOINT_MANIFEST_PATH.relative_to(ROOT)),
+            "path": CHECKPOINT_MANIFEST_PATH.relative_to(ROOT).as_posix(),
             "generated_at": manifest.get("generated_at"),
             "files": len(manifest.get("files", [])),
         },
         "source_zips": _public_source_zips(manifest),
-        "note": "The production CPU server runs physics endpoints and attempts trained PyTorch checkpoint inference when torch is installed.",
+        "note": "The production CPU server runs bundled PyTorch ML-surrogate checkpoints when torch is installed, with physics/rules fallback only if a checkpoint is absent.",
     }
 
 
 @app.post("/api/predict/degradation")
 def api_degradation(req: DegradationRequest):
-    return {"result": simulate_degradation(req), "provenance": {"model": "Na-ion UDE physics mirror", "claim": "simulation-backed"}}
+    result = simulate_degradation(req)
+    provenance = {"model": "Na-ion UDE physics mirror", "claim": "simulation-backed"}
+    hub = _get_model_hub()
+    if hub is not None and getattr(hub, "loaded_from", {}).get("M1_CathodeUDE") not in {None, "scaffold"}:
+        try:
+            from inference.engine import _m1_forward_probe
+            ckpt = str(hub.loaded_from.get("M1_CathodeUDE"))
+            result["ml_surrogate"] = {
+                "model": "M1_CathodeUDE",
+                "checkpoint_file": os.path.basename(ckpt),
+                "training_basis": "physics/rule-distilled surrogate",
+                "forward_probe": _m1_forward_probe(hub.get("M1_CathodeUDE"), req.c_rate, req.temperature_C),
+            }
+            provenance = {"model": "M1_CathodeUDE + Na-ion physics mirror", "claim": "ml-surrogate-plus-physics"}
+        except Exception as exc:
+            result["ml_surrogate"] = {"status": "error", "detail": f"{exc.__class__.__name__}: {exc}"}
+    return {"result": result, "provenance": provenance}
 
 
 @app.post("/api/simulate/bms")

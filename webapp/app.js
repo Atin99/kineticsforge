@@ -3775,6 +3775,7 @@ function modelStatusLabel(status, checkpointPresent) {
   if (/preview/i.test(status)) return "Preview";
   if (/label[_ ]?gate/i.test(status)) return "Label Gate";
   if (!checkpointPresent) return "Simulation";
+  if (/ml[_ ]?surrogate/i.test(status)) return "ML Surrogate";
   if (status === "trained_checkpoint") return "Trained";
   return String(status || "Unknown").replace(/_/g, " ");
 }

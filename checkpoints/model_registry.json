@@ -1,0 +1,310 @@
+{
+  "M1_CathodeUDE": {
+    "v1-surrogate": {
+      "name": "M1_CathodeUDE",
+      "version": "v1-surrogate",
+      "checkpoint_path": "checkpoints\\trained\\cathode_ude_best.pt",
+      "architecture_hash": "e3d0b41f3a537adb",
+      "training_data_hash": "physics_distilled_v1",
+      "validation_metrics": {
+        "surrogate_smoke_loss": 0.0
+      },
+      "physics_terms": [
+        "SEI",
+        "P2-O2",
+        "Jahn-Teller",
+        "BMS thermal graph",
+        "EIS proxy"
+      ],
+      "created_at": "2026-05-21T11:50:24Z",
+      "claim_level": "ml-surrogate",
+      "notes": "ML checkpoints trained as physics/rule-distilled surrogates for public demo inference."
+    }
+  },
+  "M2_SOH": {
+    "v1-surrogate": {
+      "name": "M2_SOH",
+      "version": "v1-surrogate",
+      "checkpoint_path": "checkpoints\\trained\\soh_best.pt",
+      "architecture_hash": "1df4662db44c4ba8",
+      "training_data_hash": "physics_distilled_v1",
+      "validation_metrics": {
+        "surrogate_smoke_loss": 0.0
+      },
+      "physics_terms": [
+        "SEI",
+        "P2-O2",
+        "Jahn-Teller",
+        "BMS thermal graph",
+        "EIS proxy"
+      ],
+      "created_at": "2026-05-21T11:50:24Z",
+      "claim_level": "ml-surrogate",
+      "notes": "ML checkpoints trained as physics/rule-distilled surrogates for public demo inference."
+    }
+  },
+  "M3_CycleLife": {
+    "v1-surrogate": {
+      "name": "M3_CycleLife",
+      "version": "v1-surrogate",
+      "checkpoint_path": "checkpoints\\trained\\cycle_life_best.pt",
+      "architecture_hash": "84d486f0c5c1d1b8",
+      "training_data_hash": "physics_distilled_v1",
+      "validation_metrics": {
+        "surrogate_smoke_loss": 0.0
+      },
+      "physics_terms": [
+        "SEI",
+        "P2-O2",
+        "Jahn-Teller",
+        "BMS thermal graph",
+        "EIS proxy"
+      ],
+      "created_at": "2026-05-21T11:50:24Z",
+      "claim_level": "ml-surrogate",
+      "notes": "ML checkpoints trained as physics/rule-distilled surrogates for public demo inference."
+    }
+  },
+  "M4_FadeRate": {
+    "v1-surrogate": {
+      "name": "M4_FadeRate",
+      "version": "v1-surrogate",
+      "checkpoint_path": "checkpoints\\trained\\fade_rate_best.pt",
+      "architecture_hash": "3866c4ad8c65d51d",
+      "training_data_hash": "physics_distilled_v1",
+      "validation_metrics": {
+        "surrogate_smoke_loss": 0.0
+      },
+      "physics_terms": [
+        "SEI",
+        "P2-O2",
+        "Jahn-Teller",
+        "BMS thermal graph",
+        "EIS proxy"
+      ],
+      "created_at": "2026-05-21T11:50:24Z",
+      "claim_level": "ml-surrogate",
+      "notes": "ML checkpoints trained as physics/rule-distilled surrogates for public demo inference."
+    }
+  },
+  "M5_BMS_TGN": {
+    "v1-surrogate": {
+      "name": "M5_BMS_TGN",
+      "version": "v1-surrogate",
+      "checkpoint_path": "checkpoints\\trained\\bms_tgn_best.pt",
+      "architecture_hash": "7883f3881069e8b9",
+      "training_data_hash": "physics_distilled_v1",
+      "validation_metrics": {
+        "surrogate_smoke_loss": 0.0
+      },
+      "physics_terms": [
+        "SEI",
+        "P2-O2",
+        "Jahn-Teller",
+        "BMS thermal graph",
+        "EIS proxy"
+      ],
+      "created_at": "2026-05-21T11:50:24Z",
+      "claim_level": "ml-surrogate",
+      "notes": "ML checkpoints trained as physics/rule-distilled surrogates for public demo inference."
+    }
+  },
+  "M6_RUL": {
+    "v1-surrogate": {
+      "name": "M6_RUL",
+      "version": "v1-surrogate",
+      "checkpoint_path": "checkpoints\\trained\\rul_best.pt",
+      "architecture_hash": "0cd67c7dc35f5859",
+      "training_data_hash": "physics_distilled_v1",
+      "validation_metrics": {
+        "surrogate_smoke_loss": 0.0
+      },
+      "physics_terms": [
+        "SEI",
+        "P2-O2",
+        "Jahn-Teller",
+        "BMS thermal graph",
+        "EIS proxy"
+      ],
+      "created_at": "2026-05-21T11:50:24Z",
+      "claim_level": "ml-surrogate",
+      "notes": "ML checkpoints trained as physics/rule-distilled surrogates for public demo inference."
+    }
+  },
+  "M7_Anomaly": {
+    "v1-surrogate": {
+      "name": "M7_Anomaly",
+      "version": "v1-surrogate",
+      "checkpoint_path": "checkpoints\\trained\\anomaly_ae_best.pt",
+      "architecture_hash": "14ced9398560f8ab",
+      "training_data_hash": "physics_distilled_v1",
+      "validation_metrics": {
+        "surrogate_smoke_loss": 0.0
+      },
+      "physics_terms": [
+        "SEI",
+        "P2-O2",
+        "Jahn-Teller",
+        "BMS thermal graph",
+        "EIS proxy"
+      ],
+      "created_at": "2026-05-21T11:50:24Z",
+      "claim_level": "ml-surrogate",
+      "notes": "ML checkpoints trained as physics/rule-distilled surrogates for public demo inference."
+    }
+  },
+  "M8_Joint_SOH_RUL": {
+    "v1-surrogate": {
+      "name": "M8_Joint_SOH_RUL",
+      "version": "v1-surrogate",
+      "checkpoint_path": "checkpoints\\trained\\joint_soh_rul_best.pt",
+      "architecture_hash": "e3bf0f3215c84719",
+      "training_data_hash": "physics_distilled_v1",
+      "validation_metrics": {
+        "surrogate_smoke_loss": 0.0
+      },
+      "physics_terms": [
+        "SEI",
+        "P2-O2",
+        "Jahn-Teller",
+        "BMS thermal graph",
+        "EIS proxy"
+      ],
+      "created_at": "2026-05-21T11:50:24Z",
+      "claim_level": "ml-surrogate",
+      "notes": "ML checkpoints trained as physics/rule-distilled surrogates for public demo inference."
+    }
+  },
+  "M9_KneeDetect": {
+    "v1-surrogate": {
+      "name": "M9_KneeDetect",
+      "version": "v1-surrogate",
+      "checkpoint_path": "checkpoints\\trained\\knee_detect_best.pt",
+      "architecture_hash": "71c945f7984e6697",
+      "training_data_hash": "physics_distilled_v1",
+      "validation_metrics": {
+        "surrogate_smoke_loss": 0.0
+      },
+      "physics_terms": [
+        "SEI",
+        "P2-O2",
+        "Jahn-Teller",
+        "BMS thermal graph",
+        "EIS proxy"
+      ],
+      "created_at": "2026-05-21T11:50:24Z",
+      "claim_level": "ml-surrogate",
+      "notes": "ML checkpoints trained as physics/rule-distilled surrogates for public demo inference."
+    }
+  },
+  "M10_ChemRank": {
+    "v1-surrogate": {
+      "name": "M10_ChemRank",
+      "version": "v1-surrogate",
+      "checkpoint_path": "checkpoints\\trained\\chem_rank_best.pt",
+      "architecture_hash": "7fb0683e325c8829",
+      "training_data_hash": "physics_distilled_v1",
+      "validation_metrics": {
+        "surrogate_smoke_loss": 0.0
+      },
+      "physics_terms": [
+        "SEI",
+        "P2-O2",
+        "Jahn-Teller",
+        "BMS thermal graph",
+        "EIS proxy"
+      ],
+      "created_at": "2026-05-21T11:50:24Z",
+      "claim_level": "ml-surrogate",
+      "notes": "ML checkpoints trained as physics/rule-distilled surrogates for public demo inference."
+    }
+  },
+  "M11_ElectrolyteHealth": {
+    "v1-surrogate": {
+      "name": "M11_ElectrolyteHealth",
+      "version": "v1-surrogate",
+      "checkpoint_path": "checkpoints\\trained\\electrolyte_health_best.pt",
+      "architecture_hash": "271c70026be38a25",
+      "training_data_hash": "physics_distilled_v1",
+      "validation_metrics": {
+        "surrogate_smoke_loss": 0.0
+      },
+      "physics_terms": [
+        "SEI",
+        "P2-O2",
+        "Jahn-Teller",
+        "BMS thermal graph",
+        "EIS proxy"
+      ],
+      "created_at": "2026-05-21T11:50:24Z",
+      "claim_level": "ml-surrogate",
+      "notes": "ML checkpoints trained as physics/rule-distilled surrogates for public demo inference."
+    }
+  },
+  "M12_Replenishability": {
+    "v1-surrogate": {
+      "name": "M12_Replenishability",
+      "version": "v1-surrogate",
+      "checkpoint_path": "checkpoints\\trained\\replenishability_best.pt",
+      "architecture_hash": "dfafa5d064f585ff",
+      "training_data_hash": "physics_distilled_v1",
+      "validation_metrics": {
+        "surrogate_smoke_loss": 0.0
+      },
+      "physics_terms": [
+        "SEI",
+        "P2-O2",
+        "Jahn-Teller",
+        "BMS thermal graph",
+        "EIS proxy"
+      ],
+      "created_at": "2026-05-21T11:50:24Z",
+      "claim_level": "ml-surrogate",
+      "notes": "ML checkpoints trained as physics/rule-distilled surrogates for public demo inference."
+    }
+  },
+  "M13_ChemIdentifier": {
+    "v1-surrogate": {
+      "name": "M13_ChemIdentifier",
+      "version": "v1-surrogate",
+      "checkpoint_path": "checkpoints\\trained\\chem_identifier_best.pt",
+      "architecture_hash": "ef7f600c10c64707",
+      "training_data_hash": "physics_distilled_v1",
+      "validation_metrics": {
+        "surrogate_smoke_loss": 0.0
+      },
+      "physics_terms": [
+        "SEI",
+        "P2-O2",
+        "Jahn-Teller",
+        "BMS thermal graph",
+        "EIS proxy"
+      ],
+      "created_at": "2026-05-21T11:50:24Z",
+      "claim_level": "ml-surrogate",
+      "notes": "ML checkpoints trained as physics/rule-distilled surrogates for public demo inference."
+    }
+  },
+  "M14_FormationProtocol": {
+    "v1-surrogate": {
+      "name": "M14_FormationProtocol",
+      "version": "v1-surrogate",
+      "checkpoint_path": "checkpoints\\trained\\formation_protocol_best.pt",
+      "architecture_hash": "c92fd9d2d8ccfa0b",
+      "training_data_hash": "physics_distilled_v1",
+      "validation_metrics": {
+        "surrogate_smoke_loss": 0.0
+      },
+      "physics_terms": [
+        "SEI",
+        "P2-O2",
+        "Jahn-Teller",
+        "BMS thermal graph",
+        "EIS proxy"
+      ],
+      "created_at": "2026-05-21T11:50:24Z",
+      "claim_level": "ml-surrogate",
+      "notes": "ML checkpoints trained as physics/rule-distilled surrogates for public demo inference."
+    }
+  }
+}

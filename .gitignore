@@ -28,6 +28,13 @@ checkpoints/trained/
 checkpoints/smoke/
 artifacts/
 
+# Bundled public demo checkpoints. These are small physics/rule-distilled
+# surrogates used by the deployed ML path; keep larger training outputs ignored.
+!checkpoints/trained/
+!checkpoints/trained/*.pt
+!checkpoints/trained/checkpoint_manifest.json
+!checkpoints/physics_distilled_surrogates_v1.zip
+
 # ── Kaggle training notebooks (not needed for deploy)
 kaggle_deploy/
 kaggle_deploy_2/

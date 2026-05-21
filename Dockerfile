@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install deploy-only dependencies (no torch, no training libs)
+# Install deploy dependencies. Torch is included so bundled checkpoints run.
 COPY requirements-deploy.txt .
 RUN pip install --no-cache-dir -r requirements-deploy.txt
 

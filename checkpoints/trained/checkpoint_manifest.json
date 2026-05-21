@@ -1,0 +1,140 @@
+{
+  "generated_at": "2026-05-21T11:50:24Z",
+  "generator": "scripts/create_surrogate_checkpoints.py",
+  "claim": "ML checkpoints trained as physics/rule-distilled surrogates for public demo inference.",
+  "source_zips": [
+    {
+      "name": "physics_distilled_surrogates_v1.zip",
+      "artifacts": 14,
+      "mtime": 1779364224
+    }
+  ],
+  "files": [
+    {
+      "model_id": "M1_CathodeUDE",
+      "file": "cathode_ude_best.pt",
+      "sha256": "e3d0b41f3a537adb343ece52ac9f3f0047baaa326ed10aea95aaa3f8e686b2cc",
+      "bytes": 190667,
+      "source_name": "physics_distilled_surrogates_v1.zip",
+      "source_member": "cathode_ude_best.pt",
+      "training_basis": "physics/rule-distilled surrogate"
+    },
+    {
+      "model_id": "M2_SOH",
+      "file": "soh_best.pt",
+      "sha256": "1df4662db44c4ba8951a6b6f4e4abb33c69f1ac87c179b6c4253721e097a58a3",
+      "bytes": 136969,
+      "source_name": "physics_distilled_surrogates_v1.zip",
+      "source_member": "soh_best.pt",
+      "training_basis": "physics/rule-distilled surrogate"
+    },
+    {
+      "model_id": "M3_CycleLife",
+      "file": "cycle_life_best.pt",
+      "sha256": "84d486f0c5c1d1b8b9a583983cfe4c3ead6f9b87c5d455ce1ef19191e0e36630",
+      "bytes": 154787,
+      "source_name": "physics_distilled_surrogates_v1.zip",
+      "source_member": "cycle_life_best.pt",
+      "training_basis": "physics/rule-distilled surrogate"
+    },
+    {
+      "model_id": "M4_FadeRate",
+      "file": "fade_rate_best.pt",
+      "sha256": "3866c4ad8c65d51d37c824777237745eb065aadd4d9217e400cfb629dd44c7c6",
+      "bytes": 35405,
+      "source_name": "physics_distilled_surrogates_v1.zip",
+      "source_member": "fade_rate_best.pt",
+      "training_basis": "physics/rule-distilled surrogate"
+    },
+    {
+      "model_id": "M5_BMS_TGN",
+      "file": "bms_tgn_best.pt",
+      "sha256": "7883f3881069e8b93e99e0ec24083ef4aeefdb6b1530e2077ceaae0c69b0ea3f",
+      "bytes": 50209,
+      "source_name": "physics_distilled_surrogates_v1.zip",
+      "source_member": "bms_tgn_best.pt",
+      "training_basis": "physics/rule-distilled surrogate"
+    },
+    {
+      "model_id": "M6_RUL",
+      "file": "rul_best.pt",
+      "sha256": "0cd67c7dc35f5859118d04a0bc64b414ec0e2c80169316b11d2fee141d329807",
+      "bytes": 145605,
+      "source_name": "physics_distilled_surrogates_v1.zip",
+      "source_member": "rul_best.pt",
+      "training_basis": "physics/rule-distilled surrogate"
+    },
+    {
+      "model_id": "M7_Anomaly",
+      "file": "anomaly_ae_best.pt",
+      "sha256": "14ced9398560f8ab1ec77ace5f09f76a330fa13ff8e69a6fdee71b900ccc3325",
+      "bytes": 131215,
+      "source_name": "physics_distilled_surrogates_v1.zip",
+      "source_member": "anomaly_ae_best.pt",
+      "training_basis": "physics/rule-distilled surrogate"
+    },
+    {
+      "model_id": "M8_Joint_SOH_RUL",
+      "file": "joint_soh_rul_best.pt",
+      "sha256": "e3bf0f3215c84719c33cf08779069c00e3f829f8a0b9d3b93dace16d4e4c4d24",
+      "bytes": 579637,
+      "source_name": "physics_distilled_surrogates_v1.zip",
+      "source_member": "joint_soh_rul_best.pt",
+      "training_basis": "physics/rule-distilled surrogate"
+    },
+    {
+      "model_id": "M9_KneeDetect",
+      "file": "knee_detect_best.pt",
+      "sha256": "71c945f7984e66970d78a116af909e7e7cda104e104ae1feefb4c110dd1fb77c",
+      "bytes": 881365,
+      "source_name": "physics_distilled_surrogates_v1.zip",
+      "source_member": "knee_detect_best.pt",
+      "training_basis": "physics/rule-distilled surrogate"
+    },
+    {
+      "model_id": "M10_ChemRank",
+      "file": "chem_rank_best.pt",
+      "sha256": "7fb0683e325c8829a62557a82faac5571e653718172f7941e9d31ba6a12b9837",
+      "bytes": 35897,
+      "source_name": "physics_distilled_surrogates_v1.zip",
+      "source_member": "chem_rank_best.pt",
+      "training_basis": "physics/rule-distilled surrogate"
+    },
+    {
+      "model_id": "M11_ElectrolyteHealth",
+      "file": "electrolyte_health_best.pt",
+      "sha256": "271c70026be38a251338b31219e9a536c9065f4475cd59eff1c449ed74b57091",
+      "bytes": 41555,
+      "source_name": "physics_distilled_surrogates_v1.zip",
+      "source_member": "electrolyte_health_best.pt",
+      "training_basis": "physics/rule-distilled surrogate"
+    },
+    {
+      "model_id": "M12_Replenishability",
+      "file": "replenishability_best.pt",
+      "sha256": "dfafa5d064f585ff5681057ecedc064b07168a1176ce32191a932993eb3bbd08",
+      "bytes": 43793,
+      "source_name": "physics_distilled_surrogates_v1.zip",
+      "source_member": "replenishability_best.pt",
+      "training_basis": "physics/rule-distilled surrogate"
+    },
+    {
+      "model_id": "M13_ChemIdentifier",
+      "file": "chem_identifier_best.pt",
+      "sha256": "ef7f600c10c64707b375e7c1d480eecff45cea7b0c93971a791a8b5f6fe775fb",
+      "bytes": 327209,
+      "source_name": "physics_distilled_surrogates_v1.zip",
+      "source_member": "chem_identifier_best.pt",
+      "training_basis": "physics/rule-distilled surrogate"
+    },
+    {
+      "model_id": "M14_FormationProtocol",
+      "file": "formation_protocol_best.pt",
+      "sha256": "c92fd9d2d8ccfa0b808d02f6825cb1c5bc472d83ce5696667c931920b783a9de",
+      "bytes": 84729,
+      "source_name": "physics_distilled_surrogates_v1.zip",
+      "source_member": "formation_protocol_best.pt",
+      "training_basis": "physics/rule-distilled surrogate"
+    }
+  ]
+}

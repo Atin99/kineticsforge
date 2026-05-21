@@ -4,3 +4,5 @@ numpy==1.26.4
 pydantic==2.9.0
 python-multipart==0.0.12
 openpyxl==3.1.5
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2+cpu
