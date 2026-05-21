@@ -3172,8 +3172,17 @@ async function runScreening() {
   var pts = items.map(function (it) {
     return { x: it.prop.Q0, y: it.prop.stability, front: it.front, selected: !!it.selected };
   });
-  drawScatter(cv, pts, { title: "Computed Pareto front: capacity vs stability" });
-  drawCompositionLandscape(makeCanvas("mat-landscape-chart"), items, selected);
+  var frame = 0;
+  function anim() {
+    frame++;
+    var n = Math.min(frame * 8, pts.length);
+    drawScatter(cv, pts.slice(0, n), { title: "Computed Pareto front: capacity vs stability" });
+    if (n < pts.length) requestAnimationFrame(anim);
+  }
+  anim();
+  var landscapeItems = generateCandidates(selected, cfg);
+  landscapeItems.push({ comp: selected, prop: selectedProp, selected: true });
+  drawCompositionLandscape(makeCanvas("mat-landscape-chart"), landscapeItems, selected);
   var synth = selectedProp.stability > 0.72 && selectedProp.fade500 < 0.16 && selectedProp.chargeRisk < 0.28 && selectedProp.oxygenRisk < 0.46 && Math.abs(selectedProp.siteError || 0) < 0.12;
   var normalizedNote = selected.normalized && Math.abs(selected.normalized.siteError || 0) > 0.02
     ? " Raw TM sliders were normalized before scoring."
@@ -3213,43 +3222,31 @@ function drawCompositionLandscape(cv, items, selected) {
   var x0 = W * 0.18, y0 = H * 0.78, sx = W * 0.48, sy = H * 0.34;
   grid.sort(function (a, b) { return (a.comp.Na + a.comp.Mn) - (b.comp.Na + b.comp.Mn); });
   
-  var idx = 0;
-  var batchSize = 500;
-  function drawBatch() {
-    var end = Math.min(idx + batchSize, grid.length);
-    for (; idx < end; idx++) {
-      var it = grid[idx];
-      var mn = (it.comp.Mn - 0.2) / 0.62;
-      var na = (it.comp.Na - 0.84) / 0.28;
-      var s = (it.prop.score - minS) / Math.max(1e-6, maxS - minS);
-      var x = x0 + mn * sx + na * 34;
-      var y = y0 - na * sy - s * 52;
-      var color = "rgba(255," + Math.round(50 + 120 * s) + "," + Math.round(26 + 80 * (1 - s)) + "," + (0.38 + 0.45 * s) + ")";
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.lineTo(x + 16, y - 7);
-      ctx.lineTo(x + 32, y);
-      ctx.lineTo(x + 16, y + 7);
-      ctx.closePath();
-      ctx.fill();
-    }
-    
-    if (idx < grid.length) {
-      setTimeout(drawBatch, 0);
-    } else {
-      var selectedItem = { comp: selected, prop: scoreComposition(selected, 318.15, materialKnobs()) };
-      var smn = (selectedItem.comp.Mn - 0.2) / 0.62;
-      var sna = (selectedItem.comp.Na - 0.84) / 0.28;
-      var ss = (selectedItem.prop.score - minS) / Math.max(1e-6, maxS - minS);
-      ctx.strokeStyle = "#fff";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(x0 + smn * sx + sna * 34 + 16, y0 - sna * sy - ss * 52, 8, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-  }
-  drawBatch();
+  grid.forEach(function (it) {
+    var mn = (it.comp.Mn - 0.2) / 0.62;
+    var na = (it.comp.Na - 0.84) / 0.28;
+    var s = (it.prop.score - minS) / Math.max(1e-6, maxS - minS);
+    var x = x0 + mn * sx + na * 34;
+    var y = y0 - sy * na - s * 52;
+    var color = "rgba(255," + Math.round(50 + 120 * s) + "," + Math.round(26 + 80 * (1 - s)) + "," + (0.38 + 0.45 * s) + ")";
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + 16, y - 7);
+    ctx.lineTo(x + 32, y);
+    ctx.lineTo(x + 16, y + 7);
+    ctx.closePath();
+    ctx.fill();
+  });
+  var selectedItem = { comp: selected, prop: scoreComposition(selected, 318.15, materialKnobs()) };
+  var smn = (selectedItem.comp.Mn - 0.2) / 0.62;
+  var sna = (selectedItem.comp.Na - 0.84) / 0.28;
+  var ss = (selectedItem.prop.score - minS) / Math.max(1e-6, maxS - minS);
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x0 + smn * sx + sna * 34 + 16, y0 - sna * sy - ss * 52, 8, 0, Math.PI * 2);
+  ctx.stroke();
 }
 
 // Recycling: shrinking-core leaching with Bayesian recovery priors.
