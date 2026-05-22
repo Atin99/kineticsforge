@@ -1,12 +1,4 @@
----
-title: KineticsForge
-emoji: 🔋
-colorFrom: red
-colorTo: gray
-sdk: docker
-app_port: 7860
-pinned: false
----
+(on work) basic idea below
 
 # KineticsForge
 
@@ -263,7 +255,7 @@ I also generate synthetic cycling data for training when real data is sparse for
 
 ## Whats done and whats not
 
-Being honest here. The browser simulations work, all panels run, and the upload path now accepts real cycler exports for first-pass diagnostics. The physics modules are implemented and they compile. The API serves predictions. I have trained models sitting in checkpoints from the kaggle runs, and `/api/models` exposes whether those files are actually present at runtime.
+Being(not) honest here. The browser simulations work, all panels run, and the upload path now accepts real cycler exports for first-pass diagnostics. The physics modules are implemented and they compile. The API serves predictions. I have trained models sitting in checkpoints from the kaggle runs, and `/api/models` exposes whether those files are actually present at runtime.
 
 The platform has a full export layer (CSV, JSON, PDF reports), a mechanism attribution system that shows _why_ degradation is happening not just _how much_, dQ/dV fingerprinting with electrochemical peak labeling, formation efficiency scoring, and a decision console that collects actionable items across all panels. Every prediction carries a confidence bar that reflects real signal quality — physics/residual ratio for degradation, cross-seed stability for BMS, feature coverage for uploads — not a fixed number.
 
